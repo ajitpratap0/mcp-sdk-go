@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
+	"reflect"
 	"syscall"
 	"time"
 
@@ -15,10 +17,14 @@ import (
 )
 
 const (
-	serverURL = "http://localhost:8080/mcp"
+	serverURL = "http://localhost:8081/mcp" // Must match the server port (8081)
 )
 
 func main() {
+	// Configure logging
+	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
+	log.Println("Starting MCP Streamable HTTP Client Example")
+	
 	// Create a context that can be canceled on interrupt
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -35,13 +41,14 @@ func main() {
 	// Create a streamable HTTP transport for connecting to the server with a longer timeout
 	t := transport.NewStreamableHTTPTransport(serverURL, transport.WithRequestTimeout(2*time.Minute))
 
-	// Set a custom session ID for resumability (optional)
-	sessionID := "session-" + time.Now().Format("20060102-150405")
-	t.SetSessionID(sessionID)
-	log.Printf("Using session ID: %s", sessionID)
-
 	// Set custom headers if needed
 	t.SetHeader("User-Agent", "MCP-Streamable-Client/1.0")
+	// Set Origin header for security validation
+	t.SetHeader("Origin", "http://localhost")
+	
+	// Note: We don't need to set a session ID manually anymore as the transport
+	// will automatically handle session management based on the server's response
+	// When the server returns a MCP-Session-ID header, the transport will store and use it
 
 	// Create client with needed capabilities
 	c := client.New(t,
@@ -132,6 +139,49 @@ func main() {
 		}
 	}
 
+	// If we found tools in the previous section, use those for batch example
+	if c.HasCapability(protocol.CapabilityTools) {
+		// Find available tools
+		tools, _, err := c.ListTools(ctx, "", nil)
+		if err != nil {
+			log.Printf("Error listing tools: %v", err)
+		} else {
+			// Example: Call tools in a batch to demonstrate batch functionality
+			callToolsBatch(ctx, c, tools, t)
+		}
+	}
+	
+	// Note: We're using the original transport instance directly
+	// In a real application, you'd typically have a client method to access the transport
+	{
+		// We don't need to type assert since we already know it's a StreamableHTTPTransport
+		// Use reflection to get the session ID since there's no direct getter
+		typ := reflect.ValueOf(t).Elem()
+		field := typ.FieldByName("sessionID")
+		if field.IsValid() {
+			sessionID := field.String()
+			if sessionID != "" {
+				log.Printf("Server assigned session ID: %s", sessionID)
+				
+				// Now demonstrate session termination by sending a DELETE request
+				log.Println("Terminating session explicitly...")
+				termCtx, termCancel := context.WithTimeout(ctx, 5*time.Second)
+				defer termCancel()
+				
+				// Create a custom HTTP request to terminate the session
+				req, _ := http.NewRequestWithContext(termCtx, "DELETE", serverURL, nil)
+				req.Header.Set("MCP-Session-ID", sessionID)
+				resp, err := http.DefaultClient.Do(req)
+				if err != nil {
+					log.Printf("Error terminating session: %v", err)
+				} else {
+					defer resp.Body.Close()
+					log.Printf("Session termination response: %s", resp.Status)
+				}
+			}
+		}
+	}
+	
 	// Wait for a moment to allow logs to be displayed
 	time.Sleep(1 * time.Second)
 	log.Println("Client example completed.")
@@ -156,6 +206,42 @@ func callHelloTool(ctx context.Context, c *client.Client, tools []protocol.Tool)
 				}
 			}
 			break
+		}
+	}
+}
+
+// callToolsBatch demonstrates calling multiple tools in a single batch request
+func callToolsBatch(ctx context.Context, c *client.Client, tools []protocol.Tool, t *transport.StreamableHTTPTransport) {
+	// Check if we have both hello and countToTen tools available
+	hasHello := false
+	hasCountToTen := false
+	for _, tool := range tools {
+		if tool.Name == "hello" {
+			hasHello = true
+		} else if tool.Name == "countToTen" {
+			hasCountToTen = true
+		}
+	}
+	
+	if hasHello && hasCountToTen {
+		log.Println("Calling multiple tools in a batch...")
+		
+		// Prepare the batch requests
+		helloInput, _ := json.Marshal(map[string]string{"name": "Batch Request"})
+		helloReq, _ := protocol.NewRequest("batch-hello", "tools/call", map[string]interface{}{
+			"name": "hello",
+			"input": helloInput,
+		})
+		
+		countReq, _ := protocol.NewRequest("batch-count", "tools/call", map[string]interface{}{
+			"name": "countToTen",
+		})
+		
+		// Send the batch request using our transport instance
+		if err := t.SendBatch(ctx, []interface{}{helloReq, countReq}); err != nil {
+			log.Printf("Error sending batch request: %v", err)
+		} else {
+			log.Println("Batch request sent successfully")
 		}
 	}
 }

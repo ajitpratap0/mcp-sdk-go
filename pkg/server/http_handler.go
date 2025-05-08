@@ -15,27 +15,43 @@ import (
 
 // HTTPHandler implements http.Handler for MCP
 type HTTPHandler struct {
-	transport transport.Transport
-	mu        sync.Mutex
+	transport      transport.Transport
+	allowedOrigins []string
+	mu             sync.Mutex
 }
 
 // NewHTTPHandler creates a new HTTP handler
 func NewHTTPHandler() *HTTPHandler {
-	return &HTTPHandler{}
+	return &HTTPHandler{
+		allowedOrigins: []string{"*"}, // Default to allow all origins, but this should be restricted in production
+	}
 }
 
 // NewStreamableHTTPHandler creates a new streamable HTTP handler
 func NewStreamableHTTPHandler() *HTTPHandler {
-	return &HTTPHandler{}
+	return &HTTPHandler{
+		allowedOrigins: []string{"*"}, // Default to allow all origins, but this should be restricted in production
+	}
 }
 
 // ServeHTTP handles HTTP requests
 func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Validate Origin header for security (prevent DNS rebinding attacks)
+	if !h.isOriginAllowed(r.Header.Get("Origin")) {
+		w.WriteHeader(http.StatusForbidden)
+		fmt.Fprintf(w, "Origin not allowed")
+		return
+	}
+
 	switch r.Method {
 	case http.MethodPost:
 		h.handlePostRequest(w, r)
 	case http.MethodGet:
 		h.handleGetRequest(w, r)
+	case http.MethodOptions:
+		h.handleOptionsRequest(w, r)
+	case http.MethodDelete:
+		h.handleDeleteRequest(w, r)
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		fmt.Fprintf(w, "Method not allowed")
@@ -44,9 +60,9 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (h *HTTPHandler) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 	// Set CORS headers
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, MCP-Session-ID")
+	w.Header().Set("Access-Control-Allow-Origin", r.Header.Get("Origin"))
+	w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, DELETE")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, MCP-Session-ID, Last-Event-ID")
 
 	// Read request body
 	body, err := io.ReadAll(r.Body)
@@ -83,7 +99,7 @@ func (h *HTTPHandler) handlePostRequest(w http.ResponseWriter, r *http.Request) 
 		}
 		
 		h.handleNotification(r.Context(), &notif)
-		w.WriteHeader(http.StatusOK) // No response for notifications
+		w.WriteHeader(http.StatusAccepted) // 202 Accepted for notifications as per spec
 	} else {
 		// Invalid JSON-RPC message
 		w.WriteHeader(http.StatusBadRequest)
@@ -147,12 +163,36 @@ func (h *HTTPHandler) handleNotification(ctx context.Context, notif *protocol.No
 	}()
 }
 
+// handleOptionsRequest handles CORS preflight requests
+func (h *HTTPHandler) handleOptionsRequest(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", r.Header.Get("Origin"))
+	w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, DELETE")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, MCP-Session-ID, Last-Event-ID")
+	w.Header().Set("Access-Control-Max-Age", "86400") // 24 hours
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleDeleteRequest handles session termination requests
+func (h *HTTPHandler) handleDeleteRequest(w http.ResponseWriter, r *http.Request) {
+	// Check if we have a session ID
+	sessionID := r.Header.Get("MCP-Session-ID")
+	if sessionID == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintf(w, "Missing MCP-Session-ID header")
+		return
+	}
+
+	// In a real implementation, you would terminate the session here
+	// For now, just send a success response
+	w.WriteHeader(http.StatusOK)
+}
+
 func (h *HTTPHandler) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 	// Set headers for SSE
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Origin", r.Header.Get("Origin"))
 
 	// Create a flusher if the ResponseWriter supports it
 	flusher, ok := w.(http.Flusher)
@@ -196,4 +236,39 @@ func (h *HTTPHandler) SetTransport(t transport.Transport) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.transport = t
+}
+
+// SetAllowedOrigins sets the allowed origins for CORS and security validation
+func (h *HTTPHandler) SetAllowedOrigins(origins []string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.allowedOrigins = origins
+}
+
+// AddAllowedOrigin adds an allowed origin for CORS and security validation
+func (h *HTTPHandler) AddAllowedOrigin(origin string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.allowedOrigins = append(h.allowedOrigins, origin)
+}
+
+// isOriginAllowed checks if the given origin is allowed
+func (h *HTTPHandler) isOriginAllowed(origin string) bool {
+	if origin == "" {
+		// Some clients may not send an Origin header
+		// Server implementers should decide if they want to allow this
+		return true
+	}
+
+	h.mu.Lock()
+	origins := h.allowedOrigins
+	h.mu.Unlock()
+
+	for _, allowed := range origins {
+		if allowed == "*" || allowed == origin {
+			return true
+		}
+	}
+
+	return false
 }

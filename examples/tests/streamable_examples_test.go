@@ -107,6 +107,24 @@ func verifyStreamableClientCode(t *testing.T, code string) {
 	if !hasOutputHandling {
 		t.Error("Client doesn't appear to handle or display streamed output")
 	}
+	
+	// Check for security features
+	hasOriginHeader := strings.Contains(code, "Origin")
+	if !hasOriginHeader {
+		t.Error("Client doesn't set Origin header for security validation")
+	}
+	
+	// Check for session handling
+	hasSessionHandling := strings.Contains(code, "session") || strings.Contains(code, "Session")
+	if !hasSessionHandling {
+		t.Error("Client doesn't implement session management functionality")
+	}
+	
+	// Check for batch functionality
+	hasBatchSupport := strings.Contains(code, "batch") || strings.Contains(code, "Batch")
+	if !hasBatchSupport {
+		t.Error("Client doesn't demonstrate batch request functionality")
+	}
 }
 
 // verifyStreamableServerCode checks that the server code properly implements streaming
@@ -148,5 +166,29 @@ func verifyStreamableServerCode(t *testing.T, code string) {
 				   strings.Contains(code, "Each")
 	if !hasIteration {
 		t.Error("Server doesn't iterate over content for streaming")
+	}
+	
+	// Check for origin validation
+	hasOriginValidation := strings.Contains(code, "AllowedOrigins") ||
+						 strings.Contains(code, "origin") ||
+						 strings.Contains(code, "Origin")
+	if !hasOriginValidation {
+		t.Error("Server doesn't implement origin validation for security")
+	}
+	
+	// Check for session management
+	hasSessionManagement := strings.Contains(code, "Session") ||
+						  strings.Contains(code, "session")
+	if !hasSessionManagement {
+		t.Error("Server doesn't implement session management")
+	}
+	
+	// Check for proper SSE event handling
+	hasSseEvents := strings.Contains(code, "SSE") ||
+				 strings.Contains(code, "event-stream") ||
+				 strings.Contains(code, "eventstream") ||
+				 strings.Contains(code, "server-sent")
+	if !hasSseEvents {
+		t.Error("Server doesn't properly implement SSE events")
 	}
 }

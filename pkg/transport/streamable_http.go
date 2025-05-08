@@ -201,11 +201,18 @@ func (t *StreamableHTTPTransport) SendRequest(ctx context.Context, method string
 	waitCtx, cancel := context.WithTimeout(ctx, t.options.RequestTimeout)
 	defer cancel()
 	
+	// Debug logging for outgoing requests
+	fmt.Printf("[DEBUG] Sending request: method=%s id=%v\n", method, id)
+	
 	// Send the request via HTTP POST
 	err = t.sendHTTPRequest(req, streamID)
 	if err != nil {
+		fmt.Printf("[ERROR] Failed to send HTTP request: %v\n", err)
 		return nil, fmt.Errorf("failed to send HTTP request: %w", err)
 	}
+	
+	// Debug log successful request
+	fmt.Printf("[DEBUG] Request sent successfully, waiting for response to id=%v\n", id)
 	
 	// Wait for the response
 	resp, err := t.WaitForResponse(waitCtx, id)
@@ -276,7 +283,14 @@ func (t *StreamableHTTPTransport) Stop(ctx context.Context) error {
 	return nil
 }
 
-// sendHTTPRequest sends a JSON-RPC message via HTTP POST
+// SendBatch sends a batch of JSON-RPC messages
+func (t *StreamableHTTPTransport) SendBatch(ctx context.Context, messages []interface{}) error {
+	// Send the batch via HTTP POST
+	// No stream ID needed since we're not expecting specific stream responses for batches
+	return t.sendHTTPRequest(messages, "")
+}
+
+// sendHTTPRequest sends a JSON-RPC message or batch via HTTP POST
 func (t *StreamableHTTPTransport) sendHTTPRequest(message interface{}, streamID string) error {
 	// Marshal the message to JSON
 	data, err := json.Marshal(message)
@@ -321,16 +335,29 @@ func (t *StreamableHTTPTransport) sendHTTPRequest(message interface{}, streamID 
 	}
 	
 	// Handle response/notification
-	if protocol.IsRequest(data) {
-		// This is a request, so we expect a response
+	// Check if this is a single JSON-RPC request or a batch
+	isRequest := protocol.IsRequest(data)
+	isBatch := len(data) > 0 && data[0] == '['
+	
+	if isRequest || isBatch {
+		// We expect a response for requests or batches containing requests
 		// Check content type
 		contentType := resp.Header.Get("Content-Type")
+		
+		// Check for session ID in response headers
+		if sessionID := resp.Header.Get("MCP-Session-ID"); sessionID != "" && t.sessionID == "" {
+			// Store session ID for future requests
+			t.SetSessionID(sessionID)
+		}
 		
 		if strings.Contains(contentType, "text/event-stream") {
 			// Server returned an SSE stream
 			// Create a new event source for this request if not already created
 			if streamID != "" {
 				if _, ok := t.eventSources.Load(streamID); !ok {
+					// Store the Last-Event-ID from response headers if provided
+					lastEventID := resp.Header.Get("Last-Event-ID")
+					
 					es := &StreamableEventSource{
 						URL:         t.endpoint,
 						Headers:     t.headers,
@@ -340,6 +367,7 @@ func (t *StreamableHTTPTransport) sendHTTPRequest(message interface{}, streamID 
 						ErrorChan:   make(chan error, 10),
 						CloseChan:   make(chan struct{}),
 						StreamID:    streamID,
+						LastEventID: lastEventID,
 					}
 					
 					es.isConnected.Store(true)
@@ -412,8 +440,26 @@ func (t *StreamableHTTPTransport) processEventSource(ctx context.Context, es *St
 	}
 }
 
-// handleMessage processes an incoming JSON-RPC message
+// handleMessage processes an incoming JSON-RPC message, which could be a single message or batch
 func (t *StreamableHTTPTransport) handleMessage(ctx context.Context, data []byte) error {
+	// Check for empty or whitespace-only messages
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 {
+		return nil // Just ignore empty messages
+	}
+	
+	// Check if it's an empty JSON object {}
+	if string(trimmed) == "{}" {
+		// This is likely a heartbeat or initialization message, just ignore it
+		return nil
+	}
+	
+	// Check if this is a batch (JSON array)
+	if len(data) > 0 && data[0] == '[' {
+		return t.handleBatchMessage(ctx, data)
+	}
+	
+	// Process single message
 	// Determine message type
 	if protocol.IsRequest(data) {
 		// Parse as a request
@@ -464,7 +510,88 @@ func (t *StreamableHTTPTransport) handleMessage(ctx context.Context, data []byte
 		return nil
 	}
 	
-	return fmt.Errorf("unknown message type")
+	// Log a sample of the message for debugging
+	maxLen := 100
+	sampleData := string(data)
+	if len(sampleData) > maxLen {
+		sampleData = sampleData[:maxLen] + "..."
+	}
+	
+	// Debug log - this will help diagnose issues
+	fmt.Printf("[DEBUG] Received unrecognized message: %s\n", sampleData)
+	
+	// Check if it's at least valid JSON
+	var anyJSON interface{}
+	jsonErr := json.Unmarshal(data, &anyJSON)
+	
+	if jsonErr != nil {
+		return fmt.Errorf("invalid JSON message: %w, data: %s", jsonErr, sampleData)
+	} else {
+		// It's valid JSON but not a recognized JSON-RPC message type
+		// Since we're already handling empty objects above, this must be another format
+		return fmt.Errorf("unknown message type: %s", sampleData)
+	}
+}
+
+// handleBatchMessage processes a batch of JSON-RPC messages
+func (t *StreamableHTTPTransport) handleBatchMessage(ctx context.Context, data []byte) error {
+	// Check what kind of batch this is (could be a batch of requests, responses, or notifications)
+	var rawMessages []json.RawMessage
+	if err := json.Unmarshal(data, &rawMessages); err != nil {
+		return fmt.Errorf("failed to unmarshal batch: %w", err)
+	}
+	
+	// Process each message in the batch
+	var responsesBatch []interface{}
+	
+	for _, rawMsg := range rawMessages {
+		if protocol.IsRequest(rawMsg) {
+			// Parse as a request
+			var req protocol.Request
+			if err := json.Unmarshal(rawMsg, &req); err != nil {
+				continue // Skip invalid messages in batch
+			}
+			
+			// Handle the request
+			resp, err := t.HandleRequest(ctx, &req)
+			if err != nil {
+				// Create error response
+				errResp, _ := protocol.NewErrorResponse(req.ID, protocol.InternalError, err.Error(), nil)
+				responsesBatch = append(responsesBatch, errResp)
+			} else if resp != nil {
+				// Add to batch of responses
+				responsesBatch = append(responsesBatch, resp)
+			}
+		} else if protocol.IsResponse(rawMsg) {
+			// Parse as a response
+			var resp protocol.Response
+			if err := json.Unmarshal(rawMsg, &resp); err != nil {
+				continue // Skip invalid messages
+			}
+			
+			// Handle the response
+			t.HandleResponse(&resp)
+		} else if protocol.IsNotification(rawMsg) {
+			// Parse as a notification
+			var notif protocol.Notification
+			if err := json.Unmarshal(rawMsg, &notif); err != nil {
+				continue // Skip invalid messages
+			}
+			
+			// Handle the notification
+			_ = t.HandleNotification(ctx, &notif) // Ignore errors for notifications in batch
+		}
+	}
+	
+	// Send batch of responses if we have any
+	if len(responsesBatch) > 0 {
+		err := t.sendHTTPRequest(responsesBatch, "")
+		if err != nil {
+			return fmt.Errorf("failed to send batch responses: %w", err)
+		}
+	}
+	
+	return nil
 }
 
 // Connect establishes a connection to the SSE endpoint
@@ -547,9 +674,15 @@ func (es *StreamableEventSource) readEvents() {
 	scanner := bufio.NewScanner(es.Connection.Body)
 	eventData := ""
 	eventID := ""
+	eventType := ""
 	
 	for scanner.Scan() {
 		line := scanner.Text()
+		
+		// Skip comment lines (used as heartbeats)
+		if strings.HasPrefix(line, ":") {
+			continue
+		}
 		
 		if line == "" {
 			// End of event, process it if we have data
@@ -559,12 +692,20 @@ func (es *StreamableEventSource) readEvents() {
 					es.LastEventID = eventID
 				}
 				
+				// Check for close event type
+				if eventType == "close" {
+					// Server signaled to close the connection
+					es.Close()
+					return
+				}
+				
 				// Send the event data
 				es.MessageChan <- []byte(eventData)
 				
 				// Reset for next event
 				eventData = ""
 				eventID = ""
+				eventType = ""
 			}
 			continue
 		}
@@ -582,6 +723,12 @@ func (es *StreamableEventSource) readEvents() {
 		} else if strings.HasPrefix(line, "id:") {
 			eventID = strings.TrimPrefix(line, "id:")
 			eventID = strings.TrimSpace(eventID)
+		} else if strings.HasPrefix(line, "event:") {
+			eventType = strings.TrimPrefix(line, "event:")
+			eventType = strings.TrimSpace(eventType)
+		} else if strings.HasPrefix(line, "retry:") {
+			// Handle retry directive - could be used to set reconnection time
+			// Currently we don't use this, but we could add a configurable retry timer
 		}
 	}
 	

@@ -26,6 +26,11 @@ func main() {
 
 	// Register the MCP endpoint handler
 	mcpHandler := server.NewStreamableHTTPHandler()
+	
+	// Set allowed origins for security (prevent DNS rebinding attacks)
+	// In a production environment, you would restrict this to specific trusted origins
+	mcpHandler.SetAllowedOrigins([]string{"http://localhost", "http://127.0.0.1"})
+	
 	handler.Handle("/mcp", mcpHandler)
 
 	// Create a streamable HTTP transport with proper endpoint URL and longer timeout
@@ -89,6 +94,8 @@ func main() {
 	// Start the server (non-blocking)
 	go func() {
 		log.Printf("Starting MCP server on http://%s/mcp...", serverAddr)
+		log.Printf("Server supports session management and origin validation")
+		log.Printf("Allowed origins: http://localhost, http://127.0.0.1")
 		if err := s.Start(ctx); err != nil {
 			log.Printf("Server error: %v", err)
 		}
@@ -198,13 +205,16 @@ func (p *CustomToolsProvider) CallTool(ctx context.Context, name string, input j
 		go func() {
 			for i := 1; i <= 10; i++ {
 				// In a real implementation, you would send these updates back to the client
-				// through your transport mechanism. This is just a placeholder.
+				// through your transport mechanism.
+				
+				// Create proper SSE-compatible update that can be streamed
 				update := map[string]interface{}{
 					"operationId": opID,
-					"progress": i * 10,
+					"count": i,        // The current count value
+					"progress": i * 10, // Progress percentage
 					"message": fmt.Sprintf("Processing step %d of 10", i),
-					"partial": i < 10,
-					"done": i == 10,
+					"partial": i < 10,  // Partial result flag
+					"done": i == 10,    // Completion flag
 				}
 				
 				// Log the update for demonstration purposes

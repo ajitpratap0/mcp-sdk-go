@@ -283,15 +283,19 @@ func (p *BasePromptsProvider) ListPrompts(ctx context.Context, tag string, pagin
 	
 	// Simple pagination (in a real implementation, this would be more sophisticated)
 	total := len(prompts)
-	limit := pagination.Limit
-	if limit <= 0 {
-		limit = 50 // Default limit
-	}
-	
+	limit := 50 // Default limit
 	start := 0
-	if pagination.Cursor != "" {
-		// In a real implementation, parse the cursor to get the start index
-		// For simplicity, we just use 0 here
+	
+	// Handle pagination if provided
+	if pagination != nil {
+		if pagination.Limit > 0 {
+			limit = pagination.Limit
+		}
+		
+		if pagination.Cursor != "" {
+			// In a real implementation, parse the cursor to get the start index
+			// For simplicity, we just use 0 here
+		}
 	}
 	
 	end := start + limit

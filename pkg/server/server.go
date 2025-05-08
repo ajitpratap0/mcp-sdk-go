@@ -383,6 +383,11 @@ func (s *Server) handleInitialize(ctx context.Context, params interface{}) (inte
 	// Store client capabilities for future reference
 	// (useful for determining if client supports sampling, etc.)
 
+	// Mark the server as initialized
+	s.initializedLock.Lock()
+	s.initialized = true
+	s.initializedLock.Unlock()
+
 	result := &protocol.InitializeResult{
 		ProtocolVersion: protocol.ProtocolRevision,
 		Name:            s.name,
@@ -691,6 +696,11 @@ func (s *Server) handleListRoots(ctx context.Context, params interface{}) (inter
 // Utility functions
 
 func parseParams(params interface{}, target interface{}) error {
+	// Handle nil params case explicitly
+	if params == nil {
+		return fmt.Errorf("params cannot be nil")
+	}
+
 	data, err := json.Marshal(params)
 	if err != nil {
 		return fmt.Errorf("failed to marshal params: %w", err)

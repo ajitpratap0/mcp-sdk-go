@@ -249,4 +249,4 @@ This project is licensed under the MIT License - see the [LICENSE](https://githu
 
 ---
 
-Copyright (c) 2025 Model Context Protocol Contributors
+Copyright (c) 2025 Go Model Context Protocol SDK Contributors

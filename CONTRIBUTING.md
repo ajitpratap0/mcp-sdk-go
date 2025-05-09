@@ -132,4 +132,4 @@ When working with paginated operations:
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the project's [MIT License](LICENSE).
+By contributing, you agree that your contributions will be licensed under the project's [MIT License](LICENSE) and will become part of the work maintained by the Go Model Context Protocol SDK Contributors.

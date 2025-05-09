@@ -3,6 +3,22 @@
 A professional, high-performance implementation of the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) specification (2025-03-26) in Go.
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/ajitpratap0/mcp-sdk-go.svg)](https://pkg.go.dev/github.com/ajitpratap0/mcp-sdk-go)
+[![GitHub license](https://img.shields.io/github/license/ajitpratap0/mcp-sdk-go)](https://github.com/ajitpratap0/mcp-sdk-go/blob/main/LICENSE)
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Features](#features)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+  - [Creating an MCP Client](#creating-an-mcp-client)
+  - [Creating an MCP Server](#creating-an-mcp-server)
+- [Examples](#examples)
+- [Project Structure](#project-structure)
+- [Documentation](#documentation)
+- [Contributing](#contributing)
+- [License](#license)
 
 ## Overview
 
@@ -21,7 +37,44 @@ The implementation prioritizes:
 - **Conformance**: Full implementation of the MCP 2025-03-26 specification
 - **Robustness**: Comprehensive validation, error handling, and recovery mechanisms
 
+## Features
+
+### Core Protocol
+- Full JSON-RPC 2.0 implementation
+- Complete lifecycle management
+- Support for capabilities negotiation
+- Request/response and notification handling
+
+### Transports
+- stdio transport (required by spec) with proper line buffering
+- HTTP with Server-Sent Events (SSE) transport
+- Streamable HTTP transport for enhanced reliability
+- Extensible transport interface for custom implementations
+
+### Server Features
+- Resources implementation
+- Tools implementation
+- Prompts implementation
+- Completion support
+- Roots support
+- Logging
+
+### Client Features
+- Sampling support
+- Resource access with subscription support
+- Tool invocation with context
+- Prompt usage
+- Comprehensive pagination utilities
+- Automatic multi-page result collection
+
+## Requirements
+
+- Go 1.18 or later
+- No external dependencies beyond the Go standard library
+
 ## Installation
+
+To install the SDK, use the standard Go package manager:
 
 ```bash
 go get github.com/ajitpratap0/mcp-sdk-go
@@ -138,12 +191,19 @@ func main() {
 
 Check the `examples` directory for complete working examples:
 
-- `simple-server`: A basic MCP server implementation with resources, tools, and prompts
-- `simple-client`: A client that connects to an MCP server using stdio transport
-- `stdio-client`: A client that demonstrates the recommended stdio transport implementation
-- `streamable-http-client`: A client that uses HTTP+SSE for transport
-- `streamable-http-server`: A server that exposes an HTTP+SSE endpoint
-- `pagination-example`: Demonstrates both manual and automatic pagination
+- **simple-server**: A basic MCP server implementation with resources, tools, and prompts
+- **simple-client**: A client that connects to an MCP server using stdio transport
+- **stdio-client**: A client that demonstrates the recommended stdio transport implementation
+- **streamable-http-client**: A client that uses HTTP+SSE for transport
+- **streamable-http-server**: A server that exposes an HTTP+SSE endpoint
+- **pagination-example**: Demonstrates both manual and automatic pagination
+
+To run an example:
+
+```bash
+cd examples/simple-server
+go run main.go
+```
 
 ## Project Structure
 
@@ -155,36 +215,38 @@ Check the `examples` directory for complete working examples:
 - `pkg/utils`: Utility functions and helpers
 - `examples`: Complete example applications
 
-## Features
+## Documentation
 
-- **Core Protocol**
-  - Full JSON-RPC 2.0 implementation
-  - Complete lifecycle management
-  - Support for capabilities negotiation
-  - Request/response and notification handling
+- [Go Reference Documentation](https://pkg.go.dev/github.com/ajitpratap0/mcp-sdk-go)
+- [MCP Specification](https://modelcontextprotocol.io/)
+- [Example Code](https://github.com/ajitpratap0/mcp-sdk-go/tree/main/examples)
 
-- **Transports**
-  - stdio transport (required by spec) with proper line buffering
-  - HTTP with Server-Sent Events (SSE) transport
-  - Streamable HTTP transport for enhanced reliability
-  - Extensible transport interface for custom implementations
+## Contributing
 
-- **Server Features**
-  - Resources implementation
-  - Tools implementation
-  - Prompts implementation
-  - Completion support
-  - Roots support
-  - Logging
+Contributions are welcome! Please read our [Contributing Guide](https://github.com/ajitpratap0/mcp-sdk-go/blob/main/CONTRIBUTING.md) for details on our code of conduct and the process for submitting pull requests.
 
-- **Client Features**
-  - Sampling support
-  - Resource access with subscription support
-  - Tool invocation with context
-  - Prompt usage
-  - Comprehensive pagination utilities
-  - Automatic multi-page result collection
+### Development Setup
+
+1. Clone the repository
+   ```bash
+   git clone https://github.com/ajitpratap0/mcp-sdk-go.git
+   cd mcp-sdk-go
+   ```
+
+2. Install dependencies
+   ```bash
+   go mod tidy
+   ```
+
+3. Run tests
+   ```bash
+   go test ./...
+   ```
 
 ## License
 
-MIT
+This project is licensed under the MIT License - see the [LICENSE](https://github.com/ajitpratap0/mcp-sdk-go/blob/main/LICENSE) file for details.
+
+---
+
+Copyright (c) 2025 Model Context Protocol Contributors

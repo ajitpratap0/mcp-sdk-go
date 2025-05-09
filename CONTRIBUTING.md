@@ -9,8 +9,8 @@ Thank you for your interest in contributing to the Go Model Context Protocol SDK
 3. **Set up your development environment**:
 
    ```bash
-   git clone <your-fork-url>
-   cd model-context-sdk
+   git clone https://github.com/your-username/mcp-sdk-go.git
+   cd mcp-sdk-go
    go mod tidy
    ```
 

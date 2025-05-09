@@ -1,4 +1,7 @@
-// Package mcp provides a Golang implementation of the Model Context Protocol (2025-03-26)
+// Package mcp provides a comprehensive implementation of the Model Context Protocol (MCP)
+// specification (2025-03-26) in Go. MCP is a protocol that standardizes communication
+// between AI models and client applications, enabling rich context sharing and
+// structured interactions.
 package mcp
 
 import (
@@ -44,36 +47,72 @@ const (
 
 // Client options
 var (
-	WithClientName           = client.WithName
-	WithClientVersion        = client.WithVersion
-	WithClientCapability     = client.WithCapability
+	// WithClientName sets the client name for identification
+	WithClientName = client.WithName
+
+	// WithClientVersion sets the client version
+	WithClientVersion = client.WithVersion
+
+	// WithClientCapability enables or disables a specific capability for the client
+	WithClientCapability = client.WithCapability
+
+	// WithClientFeatureOptions allows setting additional feature options for capabilities
 	WithClientFeatureOptions = client.WithFeatureOptions
 )
 
 // Server options
 var (
-	WithServerName           = server.WithName
-	WithServerVersion        = server.WithVersion
-	WithServerDescription    = server.WithDescription
-	WithServerHomepage       = server.WithHomepage
-	WithServerCapability     = server.WithCapability
+	// WithServerName sets the server name for identification
+	WithServerName = server.WithName
+
+	// WithServerVersion sets the server version
+	WithServerVersion = server.WithVersion
+
+	// WithServerDescription sets a human-readable description of the server
+	WithServerDescription = server.WithDescription
+
+	// WithServerHomepage sets the URL of the server's homepage
+	WithServerHomepage = server.WithHomepage
+
+	// WithServerCapability enables or disables a specific capability for the server
+	WithServerCapability = server.WithCapability
+
+	// WithServerFeatureOptions allows setting additional feature options for capabilities
 	WithServerFeatureOptions = server.WithFeatureOptions
-	WithToolsProvider        = server.WithToolsProvider
-	WithResourcesProvider    = server.WithResourcesProvider
-	WithPromptsProvider      = server.WithPromptsProvider
-	WithCompletionProvider   = server.WithCompletionProvider
-	WithRootsProvider        = server.WithRootsProvider
-	WithLogger               = server.WithLogger
+
+	// WithToolsProvider registers a tools provider with the server
+	WithToolsProvider = server.WithToolsProvider
+
+	// WithResourcesProvider registers a resources provider with the server
+	WithResourcesProvider = server.WithResourcesProvider
+
+	// WithPromptsProvider registers a prompts provider with the server
+	WithPromptsProvider = server.WithPromptsProvider
+
+	// WithCompletionProvider registers a completion provider with the server
+	WithCompletionProvider = server.WithCompletionProvider
+
+	// WithRootsProvider registers a roots provider with the server
+	WithRootsProvider = server.WithRootsProvider
+
+	// WithLogger sets the logger for the server
+	WithLogger = server.WithLogger
 )
 
 // Provider creation
 var (
-	NewBaseToolsProvider     = server.NewBaseToolsProvider
+	// NewBaseToolsProvider creates a new base tools provider implementation
+	NewBaseToolsProvider = server.NewBaseToolsProvider
+
+	// NewBaseResourcesProvider creates a new base resources provider implementation
 	NewBaseResourcesProvider = server.NewBaseResourcesProvider
-	NewBasePromptsProvider   = server.NewBasePromptsProvider
+
+	// NewBasePromptsProvider creates a new base prompts provider implementation
+	NewBasePromptsProvider = server.NewBasePromptsProvider
 )
 
 // Transport options
 var (
+	// WithRequestTimeout sets the request timeout for transports
 	WithRequestTimeout = transport.WithRequestTimeout
 )

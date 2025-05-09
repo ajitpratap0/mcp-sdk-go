@@ -81,6 +81,21 @@ func (m *mockTransport) GenerateID() string {
 	return "test-id"
 }
 
+// Send implements the transport.Transport interface for basic message sending
+func (m *mockTransport) Send(data []byte) error {
+	return nil
+}
+
+// SetReceiveHandler sets the handler for received messages
+func (m *mockTransport) SetReceiveHandler(handler transport.ReceiveHandler) {
+	// No-op for mock
+}
+
+// SetErrorHandler sets the handler for errors
+func (m *mockTransport) SetErrorHandler(handler transport.ErrorHandler) {
+	// No-op for mock
+}
+
 // Tests for client creation and options
 func TestNewClient(t *testing.T) {
 	mt := newMockTransport()

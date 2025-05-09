@@ -346,3 +346,20 @@ func (es *EventSource) readEvents() {
 		}
 	}
 }
+
+// Send transmits a message over the transport.
+// For HTTPTransport, this is not fully applicable since it operates in a request/response model.
+// This is here to satisfy the Transport interface.
+func (t *HTTPTransport) Send(data []byte) error {
+	return fmt.Errorf("Send method not applicable for HTTPTransport")
+}
+
+// SetReceiveHandler sets the handler for received messages.
+func (t *HTTPTransport) SetReceiveHandler(handler ReceiveHandler) {
+	// This is a placeholder implementation
+}
+
+// SetErrorHandler sets the handler for transport errors.
+func (t *HTTPTransport) SetErrorHandler(handler ErrorHandler) {
+	// This is a placeholder implementation
+}

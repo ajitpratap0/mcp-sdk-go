@@ -170,7 +170,9 @@ func main() {
 	log.Println("Client example completed.")
 }
 
-func checkCapability(c *client.Client, capability protocol.CapabilityType, name string) {
+// checkCapability checks if the client supports a specific capability and logs the result.
+// It provides a simple visual indicator for capability support in the console output.
+func checkCapability(c client.Client, capability protocol.CapabilityType, name string) {
 	if c.HasCapability(capability) {
 		log.Printf("  ✓ %s", name)
 	} else {

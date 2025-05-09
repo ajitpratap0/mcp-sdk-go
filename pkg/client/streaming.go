@@ -14,7 +14,7 @@ import (
 type StreamingUpdateHandler func(json.RawMessage)
 
 // CallToolStreaming invokes a tool on the server with streaming updates
-func (c *Client) CallToolStreaming(ctx context.Context, name string, input interface{}, toolContext interface{}, updateHandler StreamingUpdateHandler) (*protocol.CallToolResult, error) {
+func (c *ClientConfig) CallToolStreaming(ctx context.Context, name string, input interface{}, toolContext interface{}, updateHandler StreamingUpdateHandler) (*protocol.CallToolResult, error) {
 	if !c.HasCapability(protocol.CapabilityTools) {
 		return nil, errors.New("server does not support tools")
 	}
@@ -178,7 +178,7 @@ func nextRequestID() int64 {
 }
 
 // Helper function to register a progress handler
-func (c *Client) registerProgressHandler(requestID string, handler func(json.RawMessage)) {
+func (c *ClientConfig) registerProgressHandler(requestID string, handler func(json.RawMessage)) {
 	// In a real implementation, this would register the handler with the transport
 	// For now, this is a placeholder since the actual protocol doesn't support streaming yet
 }

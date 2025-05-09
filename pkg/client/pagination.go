@@ -72,7 +72,7 @@ func FetchAllPages(ctx context.Context, initialParams *protocol.PaginationParams
 }
 
 // ListAllTools retrieves all tools from the server, handling pagination automatically
-func (c *Client) ListAllTools(ctx context.Context, category string) ([]protocol.Tool, error) {
+func (c *ClientConfig) ListAllTools(ctx context.Context, category string) ([]protocol.Tool, error) {
 	if !c.HasCapability(protocol.CapabilityTools) {
 		return nil, fmt.Errorf("server does not support tools")
 	}
@@ -100,7 +100,7 @@ func (c *Client) ListAllTools(ctx context.Context, category string) ([]protocol.
 }
 
 // ListAllResources retrieves all resources from the server, handling pagination automatically
-func (c *Client) ListAllResources(ctx context.Context, uri string, recursive bool) ([]protocol.Resource, []protocol.ResourceTemplate, error) {
+func (c *ClientConfig) ListAllResources(ctx context.Context, uri string, recursive bool) ([]protocol.Resource, []protocol.ResourceTemplate, error) {
 	if !c.HasCapability(protocol.CapabilityResources) {
 		return nil, nil, fmt.Errorf("server does not support resources")
 	}
@@ -137,7 +137,7 @@ func (c *Client) ListAllResources(ctx context.Context, uri string, recursive boo
 }
 
 // ListAllPrompts retrieves all prompts from the server, handling pagination automatically
-func (c *Client) ListAllPrompts(ctx context.Context, tag string) ([]protocol.Prompt, error) {
+func (c *ClientConfig) ListAllPrompts(ctx context.Context, tag string) ([]protocol.Prompt, error) {
 	if !c.HasCapability(protocol.CapabilityPrompts) {
 		return nil, fmt.Errorf("server does not support prompts")
 	}
@@ -165,7 +165,7 @@ func (c *Client) ListAllPrompts(ctx context.Context, tag string) ([]protocol.Pro
 }
 
 // ListAllRoots retrieves all roots from the server, handling pagination automatically
-func (c *Client) ListAllRoots(ctx context.Context, tag string) ([]protocol.Root, error) {
+func (c *ClientConfig) ListAllRoots(ctx context.Context, tag string) ([]protocol.Root, error) {
 	if !c.HasCapability(protocol.CapabilityRoots) {
 		return nil, fmt.Errorf("server does not support roots")
 	}

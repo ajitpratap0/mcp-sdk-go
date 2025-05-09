@@ -66,7 +66,7 @@ func main() {
 }
 
 // demonstrateManualPagination shows how to handle pagination manually
-func demonstrateManualPagination(ctx context.Context, c *client.Client) {
+func demonstrateManualPagination(ctx context.Context, c client.Client) {
 	// Create pagination parameters with a small page size
 	pagination := &protocol.PaginationParams{
 		Limit: 10, // Small limit to demonstrate pagination
@@ -128,7 +128,7 @@ func demonstrateManualPagination(ctx context.Context, c *client.Client) {
 }
 
 // demonstrateAutomaticPagination shows how to use the automatic pagination utilities
-func demonstrateAutomaticPagination(ctx context.Context, c *client.Client) {
+func demonstrateAutomaticPagination(ctx context.Context, c client.Client) {
 	// Get all resources automatically with the utility method
 	allResources, allTemplates, err := c.ListAllResources(ctx, "", true)
 	if err != nil {

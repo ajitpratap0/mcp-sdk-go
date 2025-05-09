@@ -117,7 +117,7 @@ func main() {
 }
 
 // checkCapabilities checks and logs the server's capabilities
-func checkCapabilities(c *client.Client) {
+func checkCapabilities(c client.Client) {
 	capabilities := []struct {
 		capability protocol.CapabilityType
 		name       string

@@ -187,7 +187,7 @@ func main() {
 	log.Println("Client example completed.")
 }
 
-func callHelloTool(ctx context.Context, c *client.Client, tools []protocol.Tool) {
+func callHelloTool(ctx context.Context, c client.Client, tools []protocol.Tool) {
 	for _, tool := range tools {
 		if tool.Name == "hello" {
 			log.Println("Calling 'hello' tool...")
@@ -211,7 +211,7 @@ func callHelloTool(ctx context.Context, c *client.Client, tools []protocol.Tool)
 }
 
 // callToolsBatch demonstrates calling multiple tools in a single batch request
-func callToolsBatch(ctx context.Context, c *client.Client, tools []protocol.Tool, t *transport.StreamableHTTPTransport) {
+func callToolsBatch(ctx context.Context, c client.Client, tools []protocol.Tool, t *transport.StreamableHTTPTransport) {
 	// Check if we have both hello and countToTen tools available
 	hasHello := false
 	hasCountToTen := false
@@ -246,7 +246,7 @@ func callToolsBatch(ctx context.Context, c *client.Client, tools []protocol.Tool
 	}
 }
 
-func callStreamingTool(ctx context.Context, c *client.Client, tools []protocol.Tool) {
+func callStreamingTool(ctx context.Context, c client.Client, tools []protocol.Tool) {
 	for _, tool := range tools {
 		if tool.Name == "countToTen" {
 			log.Println("Calling 'countToTen' streaming tool...")
@@ -278,7 +278,7 @@ func callStreamingTool(ctx context.Context, c *client.Client, tools []protocol.T
 	}
 }
 
-func checkCapability(c *client.Client, capability protocol.CapabilityType, name string) {
+func checkCapability(c client.Client, capability protocol.CapabilityType, name string) {
 	if c.HasCapability(capability) {
 		log.Printf("  ✓ %s", name)
 	} else {

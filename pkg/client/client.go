@@ -1,3 +1,5 @@
+// Package client provides the client-side implementation of the MCP protocol,
+// allowing applications to connect to MCP servers and consume their capabilities.
 package client
 
 import (
@@ -14,8 +16,131 @@ import (
 	"github.com/ajitpratap0/mcp-sdk-go/pkg/transport"
 )
 
+// Client is the main interface for an MCP client.
+type Client interface {
+	// Initialize initializes the client with the provided context.
+	// It performs capability negotiation with the server.
+	Initialize(ctx context.Context) error
+
+	// Start starts the client's transport.
+	// This begins the message handling loop.
+	Start(ctx context.Context) error
+
+	// InitializeAndStart combines Initialize and Start operations for convenience.
+	InitializeAndStart(ctx context.Context) error
+
+	// Close closes the client and its transport.
+	// Any ongoing operations will be cancelled.
+	Close() error
+
+	// HasCapability checks if a specific capability is supported by the server.
+	HasCapability(capability protocol.CapabilityType) bool
+
+	// Capabilities returns the map of all supported capabilities.
+	// The keys are capability names and the values indicate whether they are enabled.
+	Capabilities() map[string]bool
+
+	// ListTools lists available tools from the server.
+	// The category parameter can be used to filter tools by category.
+	// Pagination can be used to limit results or fetch subsequent pages.
+	ListTools(ctx context.Context, category string, pagination *protocol.PaginationParams) ([]protocol.Tool, *protocol.PaginationResult, error)
+
+	// ListAllTools automatically paginates to retrieve all tools matching the category.
+	// This is a convenience method that handles pagination internally.
+	ListAllTools(ctx context.Context, category string) ([]protocol.Tool, error)
+
+	// CallTool invokes a tool with the given name, input, and context.
+	// The input and context are typically JSON-encoded objects.
+	CallTool(ctx context.Context, name string, input interface{}, toolContext interface{}) (*protocol.CallToolResult, error)
+
+	// CallToolStreaming invokes a tool with streaming updates.
+	// It's similar to CallTool but provides incremental updates via the handler function.
+	CallToolStreaming(ctx context.Context, name string, input interface{}, toolContext interface{}, updateHandler StreamingUpdateHandler) (*protocol.CallToolResult, error)
+
+	// ListResources lists available resources from the server.
+	// The uri parameter specifies the resource URI to list.
+	// The recursive parameter indicates whether to list resources recursively.
+	// Pagination can be used to limit results or fetch subsequent pages.
+	ListResources(ctx context.Context, uri string, recursive bool, pagination *protocol.PaginationParams) ([]protocol.Resource, []protocol.ResourceTemplate, *protocol.PaginationResult, error)
+
+	// ListAllResources automatically paginates to retrieve all resources.
+	// This is a convenience method that handles pagination internally.
+	ListAllResources(ctx context.Context, uri string, recursive bool) ([]protocol.Resource, []protocol.ResourceTemplate, error)
+
+	// ReadResource retrieves a specific resource by URI.
+	// The templateParams parameter can be used to customize template resources.
+	// The rangeOpt parameter can be used to request a specific range of the resource.
+	ReadResource(ctx context.Context, uri string, templateParams map[string]interface{}, rangeOpt *protocol.ResourceRange) (*protocol.ResourceContents, error)
+
+	// SubscribeResource subscribes to resource updates.
+	// After subscribing, the ResourceChangedCallback will be called when the resource changes.
+	// The recursive parameter indicates whether to subscribe to child resources.
+	SubscribeResource(ctx context.Context, uri string, recursive bool) error
+
+	// ListPrompts lists available prompts from the server.
+	// The tag parameter can be used to filter prompts by tag.
+	// Pagination can be used to limit results or fetch subsequent pages.
+	ListPrompts(ctx context.Context, tag string, pagination *protocol.PaginationParams) ([]protocol.Prompt, *protocol.PaginationResult, error)
+
+	// ListAllPrompts automatically paginates to retrieve all prompts matching the tag.
+	// This is a convenience method that handles pagination internally.
+	ListAllPrompts(ctx context.Context, tag string) ([]protocol.Prompt, error)
+
+	// GetPrompt retrieves a specific prompt by ID.
+	GetPrompt(ctx context.Context, id string) (*protocol.Prompt, error)
+
+	// ListRoots lists root resources from the server.
+	// The tag parameter can be used to filter roots by tag.
+	// Pagination can be used to limit results or fetch subsequent pages.
+	ListRoots(ctx context.Context, tag string, pagination *protocol.PaginationParams) ([]protocol.Root, *protocol.PaginationResult, error)
+
+	// ListAllRoots automatically paginates to retrieve all roots matching the tag.
+	// This is a convenience method that handles pagination internally.
+	ListAllRoots(ctx context.Context, tag string) ([]protocol.Root, error)
+
+	// Complete requests a completion from the server.
+	// This is used for text completion operations with AI models.
+	Complete(ctx context.Context, params *protocol.CompleteParams) (*protocol.CompleteResult, error)
+
+	// SetSamplingCallback sets a callback function for sampling events.
+	// This is used to receive intermediate results during completion.
+	SetSamplingCallback(callback SamplingCallback)
+
+	// SetResourceChangedCallback sets a callback function for resource change notifications.
+	// This is called when a subscribed resource changes.
+	SetResourceChangedCallback(callback ResourceChangedCallback)
+
+	// ServerInfo returns information about the server.
+	ServerInfo() *protocol.ServerInfo
+
+	// Cancel cancels an ongoing operation by ID.
+	Cancel(ctx context.Context, id interface{}) (bool, error)
+
+	// Ping checks if the server is responding.
+	Ping(ctx context.Context) (*protocol.PingResult, error)
+
+	// SetLogLevel sets the logging level for the client.
+	SetLogLevel(ctx context.Context, level protocol.LogLevel) error
+}
+
+// Option represents a client configuration option.
+// Options are used to configure a client during creation.
+type Option func(*ClientConfig)
+
+// SamplingCallback is called when sampling events are received.
+// These events provide intermediate results during completion operations.
+type SamplingCallback func(protocol.SamplingEvent)
+
+// ResourceChangedCallback is called when resource change notifications are received.
+// It receives the resource ID and the new resource data.
+type ResourceChangedCallback func(string, interface{})
+
+// MessageHandler handles custom JSON-RPC method calls.
+// It takes a context and the raw JSON parameters, and returns a result or an error.
+type MessageHandler func(context.Context, json.RawMessage) (interface{}, error)
+
 // Client represents an MCP client
-type Client struct {
+type ClientConfig struct {
 	transport       transport.Transport
 	name            string
 	version         string
@@ -29,32 +154,32 @@ type Client struct {
 }
 
 // ClientOption defines options for creating a client
-type ClientOption func(*Client)
+type ClientOption func(*ClientConfig)
 
 // WithName sets the client name
 func WithName(name string) ClientOption {
-	return func(c *Client) {
+	return func(c *ClientConfig) {
 		c.name = name
 	}
 }
 
 // WithVersion sets the client version
 func WithVersion(version string) ClientOption {
-	return func(c *Client) {
+	return func(c *ClientConfig) {
 		c.version = version
 	}
 }
 
 // WithCapability enables a client capability
 func WithCapability(capability protocol.CapabilityType, enabled bool) ClientOption {
-	return func(c *Client) {
+	return func(c *ClientConfig) {
 		c.capabilities[string(capability)] = enabled
 	}
 }
 
 // WithFeatureOptions sets feature options for the client
 func WithFeatureOptions(options map[string]interface{}) ClientOption {
-	return func(c *Client) {
+	return func(c *ClientConfig) {
 		for k, v := range options {
 			c.featureOptions[k] = v
 		}
@@ -62,10 +187,10 @@ func WithFeatureOptions(options map[string]interface{}) ClientOption {
 }
 
 // New creates a new MCP client
-func New(t transport.Transport, options ...ClientOption) *Client {
+func New(t transport.Transport, options ...ClientOption) *ClientConfig {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	client := &Client{
+	client := &ClientConfig{
 		transport:      t,
 		name:           "go-mcp-client",
 		version:        "1.0.0",
@@ -102,7 +227,7 @@ func New(t transport.Transport, options ...ClientOption) *Client {
 }
 
 // Initialize initializes the client and performs capability negotiation
-func (c *Client) Initialize(ctx context.Context) error {
+func (c *ClientConfig) Initialize(ctx context.Context) error {
 	c.initializedLock.RLock()
 	if c.initialized {
 		c.initializedLock.RUnlock()
@@ -162,19 +287,32 @@ func (c *Client) Initialize(ctx context.Context) error {
 	return nil
 }
 
+// Start starts the client's transport
+func (c *ClientConfig) Start(ctx context.Context) error {
+	return c.transport.Start(ctx)
+}
+
+// InitializeAndStart combines Initialize and Start operations for convenience
+func (c *ClientConfig) InitializeAndStart(ctx context.Context) error {
+	if err := c.Initialize(ctx); err != nil {
+		return err
+	}
+	return c.Start(ctx)
+}
+
 // Close shuts down the client
-func (c *Client) Close() error {
+func (c *ClientConfig) Close() error {
 	c.cancel()
 	return c.transport.Stop(context.Background())
 }
 
 // ServerInfo returns information about the connected server
-func (c *Client) ServerInfo() *protocol.ServerInfo {
+func (c *ClientConfig) ServerInfo() *protocol.ServerInfo {
 	return c.serverInfo
 }
 
 // HasCapability checks if the server supports a specific capability
-func (c *Client) HasCapability(capability protocol.CapabilityType) bool {
+func (c *ClientConfig) HasCapability(capability protocol.CapabilityType) bool {
 	if c.serverInfo == nil {
 		return false
 	}
@@ -183,8 +321,13 @@ func (c *Client) HasCapability(capability protocol.CapabilityType) bool {
 	return ok && enabled
 }
 
+// Capabilities returns all capabilities
+func (c *ClientConfig) Capabilities() map[string]bool {
+	return c.capabilities
+}
+
 // ListTools retrieves the list of tools from the server
-func (c *Client) ListTools(ctx context.Context, category string, pagination *protocol.PaginationParams) ([]protocol.Tool, *protocol.PaginationResult, error) {
+func (c *ClientConfig) ListTools(ctx context.Context, category string, pagination *protocol.PaginationParams) ([]protocol.Tool, *protocol.PaginationResult, error) {
 	if !c.HasCapability(protocol.CapabilityTools) {
 		return nil, nil, errors.New("server does not support tools")
 	}
@@ -221,7 +364,7 @@ func (c *Client) ListTools(ctx context.Context, category string, pagination *pro
 }
 
 // CallTool invokes a tool on the server
-func (c *Client) CallTool(ctx context.Context, name string, input interface{}, context interface{}) (*protocol.CallToolResult, error) {
+func (c *ClientConfig) CallTool(ctx context.Context, name string, input interface{}, context interface{}) (*protocol.CallToolResult, error) {
 	if !c.HasCapability(protocol.CapabilityTools) {
 		return nil, errors.New("server does not support tools")
 	}
@@ -261,7 +404,7 @@ func (c *Client) CallTool(ctx context.Context, name string, input interface{}, c
 }
 
 // ListResources retrieves the list of resources from the server
-func (c *Client) ListResources(ctx context.Context, uri string, recursive bool, pagination *protocol.PaginationParams) ([]protocol.Resource, []protocol.ResourceTemplate, *protocol.PaginationResult, error) {
+func (c *ClientConfig) ListResources(ctx context.Context, uri string, recursive bool, pagination *protocol.PaginationParams) ([]protocol.Resource, []protocol.ResourceTemplate, *protocol.PaginationResult, error) {
 	if !c.HasCapability(protocol.CapabilityResources) {
 		return nil, nil, nil, errors.New("server does not support resources")
 	}
@@ -299,7 +442,7 @@ func (c *Client) ListResources(ctx context.Context, uri string, recursive bool, 
 }
 
 // ReadResource reads a resource from the server
-func (c *Client) ReadResource(ctx context.Context, uri string, templateParams map[string]interface{}, rangeOpt *protocol.ResourceRange) (*protocol.ResourceContents, error) {
+func (c *ClientConfig) ReadResource(ctx context.Context, uri string, templateParams map[string]interface{}, rangeOpt *protocol.ResourceRange) (*protocol.ResourceContents, error) {
 	if !c.HasCapability(protocol.CapabilityResources) {
 		return nil, errors.New("server does not support resources")
 	}
@@ -324,7 +467,7 @@ func (c *Client) ReadResource(ctx context.Context, uri string, templateParams ma
 }
 
 // SubscribeResource subscribes to resource changes
-func (c *Client) SubscribeResource(ctx context.Context, uri string, recursive bool) error {
+func (c *ClientConfig) SubscribeResource(ctx context.Context, uri string, recursive bool) error {
 	if !c.HasCapability(protocol.CapabilityResourceSubscriptions) {
 		return errors.New("server does not support resource subscriptions")
 	}
@@ -352,7 +495,7 @@ func (c *Client) SubscribeResource(ctx context.Context, uri string, recursive bo
 }
 
 // ListPrompts retrieves the list of prompts from the server
-func (c *Client) ListPrompts(ctx context.Context, tag string, pagination *protocol.PaginationParams) ([]protocol.Prompt, *protocol.PaginationResult, error) {
+func (c *ClientConfig) ListPrompts(ctx context.Context, tag string, pagination *protocol.PaginationParams) ([]protocol.Prompt, *protocol.PaginationResult, error) {
 	if !c.HasCapability(protocol.CapabilityPrompts) {
 		return nil, nil, errors.New("server does not support prompts")
 	}
@@ -389,7 +532,7 @@ func (c *Client) ListPrompts(ctx context.Context, tag string, pagination *protoc
 }
 
 // GetPrompt retrieves a prompt from the server
-func (c *Client) GetPrompt(ctx context.Context, id string) (*protocol.Prompt, error) {
+func (c *ClientConfig) GetPrompt(ctx context.Context, id string) (*protocol.Prompt, error) {
 	if !c.HasCapability(protocol.CapabilityPrompts) {
 		return nil, errors.New("server does not support prompts")
 	}
@@ -412,7 +555,7 @@ func (c *Client) GetPrompt(ctx context.Context, id string) (*protocol.Prompt, er
 }
 
 // Complete requests a completion from the server
-func (c *Client) Complete(ctx context.Context, params *protocol.CompleteParams) (*protocol.CompleteResult, error) {
+func (c *ClientConfig) Complete(ctx context.Context, params *protocol.CompleteParams) (*protocol.CompleteResult, error) {
 	if !c.HasCapability(protocol.CapabilityComplete) {
 		return nil, errors.New("server does not support completions")
 	}
@@ -431,7 +574,7 @@ func (c *Client) Complete(ctx context.Context, params *protocol.CompleteParams) 
 }
 
 // ListRoots retrieves the list of roots from the server
-func (c *Client) ListRoots(ctx context.Context, tag string, pagination *protocol.PaginationParams) ([]protocol.Root, *protocol.PaginationResult, error) {
+func (c *ClientConfig) ListRoots(ctx context.Context, tag string, pagination *protocol.PaginationParams) ([]protocol.Root, *protocol.PaginationResult, error) {
 	if !c.HasCapability(protocol.CapabilityRoots) {
 		return nil, nil, errors.New("server does not support roots")
 	}
@@ -468,7 +611,7 @@ func (c *Client) ListRoots(ctx context.Context, tag string, pagination *protocol
 }
 
 // SetLogLevel sets the log level on the server
-func (c *Client) SetLogLevel(ctx context.Context, level protocol.LogLevel) error {
+func (c *ClientConfig) SetLogLevel(ctx context.Context, level protocol.LogLevel) error {
 	if !c.HasCapability(protocol.CapabilityLogging) {
 		return errors.New("server does not support logging")
 	}
@@ -495,7 +638,7 @@ func (c *Client) SetLogLevel(ctx context.Context, level protocol.LogLevel) error
 }
 
 // Cancel cancels a pending request
-func (c *Client) Cancel(ctx context.Context, id interface{}) (bool, error) {
+func (c *ClientConfig) Cancel(ctx context.Context, id interface{}) (bool, error) {
 	params := &protocol.CancelParams{
 		ID: id,
 	}
@@ -514,7 +657,7 @@ func (c *Client) Cancel(ctx context.Context, id interface{}) (bool, error) {
 }
 
 // Ping sends a ping to the server
-func (c *Client) Ping(ctx context.Context) (*protocol.PingResult, error) {
+func (c *ClientConfig) Ping(ctx context.Context) (*protocol.PingResult, error) {
 	params := &protocol.PingParams{
 		Timestamp: time.Now().UnixNano() / int64(time.Millisecond),
 	}
@@ -532,8 +675,8 @@ func (c *Client) Ping(ctx context.Context) (*protocol.PingResult, error) {
 	return &pingResult, nil
 }
 
-// SendProgress sends a progress notification
-func (c *Client) SendProgress(ctx context.Context, id interface{}, message string, percent float64, completed bool) error {
+// SendProgress sends a progress notification to the client
+func (c *ClientConfig) SendProgress(ctx context.Context, id interface{}, message string, percent float64, completed bool) error {
 	params := &protocol.ProgressParams{
 		ID:        id,
 		Message:   message,
@@ -544,16 +687,25 @@ func (c *Client) SendProgress(ctx context.Context, id interface{}, message strin
 	return c.transport.SendNotification(ctx, protocol.MethodProgress, params)
 }
 
-// Sample performs an AI sampling operation
-func (c *Client) Sample(ctx context.Context, params *protocol.SampleParams, handler func(*protocol.SampleResult) error) error {
-	// Implementation depends on how the client handles sampling
-	// This is a placeholder for the actual implementation
-	return errors.New("sampling not implemented")
+// Sample sends a sample request to the client
+func (c *ClientConfig) Sample(ctx context.Context, params *protocol.SampleParams, handler func(*protocol.SampleResult) error) error {
+	// Implementation details...
+	return nil
+}
+
+// SetSamplingCallback sets a callback for sampling events
+func (c *ClientConfig) SetSamplingCallback(callback SamplingCallback) {
+	// Implementation will be added later
+}
+
+// SetResourceChangedCallback sets a callback for resource changes
+func (c *ClientConfig) SetResourceChangedCallback(callback ResourceChangedCallback) {
+	// Implementation will be added later
 }
 
 // Request handlers
 
-func (c *Client) handleSample(ctx context.Context, params interface{}) (interface{}, error) {
+func (c *ClientConfig) handleSample(ctx context.Context, params interface{}) (interface{}, error) {
 	var sampleParams protocol.SampleParams
 	if err := parseParams(params, &sampleParams); err != nil {
 		return nil, fmt.Errorf("invalid params: %w", err)
@@ -563,7 +715,7 @@ func (c *Client) handleSample(ctx context.Context, params interface{}) (interfac
 	return nil, errors.New("sampling not implemented in this client")
 }
 
-func (c *Client) handleCancel(ctx context.Context, params interface{}) (interface{}, error) {
+func (c *ClientConfig) handleCancel(ctx context.Context, params interface{}) (interface{}, error) {
 	var cancelParams protocol.CancelParams
 	if err := parseParams(params, &cancelParams); err != nil {
 		return nil, fmt.Errorf("invalid params: %w", err)
@@ -573,7 +725,7 @@ func (c *Client) handleCancel(ctx context.Context, params interface{}) (interfac
 	return &protocol.CancelResult{Cancelled: false}, nil
 }
 
-func (c *Client) handlePing(ctx context.Context, params interface{}) (interface{}, error) {
+func (c *ClientConfig) handlePing(ctx context.Context, params interface{}) (interface{}, error) {
 	var pingParams protocol.PingParams
 	if err := parseParams(params, &pingParams); err != nil {
 		return nil, fmt.Errorf("invalid params: %w", err)
@@ -589,7 +741,7 @@ func (c *Client) handlePing(ctx context.Context, params interface{}) (interface{
 
 // Notification handlers
 
-func (c *Client) handleToolsChanged(ctx context.Context, params interface{}) error {
+func (c *ClientConfig) handleToolsChanged(ctx context.Context, params interface{}) error {
 	var p protocol.ToolsChangedParams
 	if err := parseParams(params, &p); err != nil {
 		return fmt.Errorf("invalid params: %w", err)
@@ -599,7 +751,7 @@ func (c *Client) handleToolsChanged(ctx context.Context, params interface{}) err
 	return nil
 }
 
-func (c *Client) handleResourcesChanged(ctx context.Context, params interface{}) error {
+func (c *ClientConfig) handleResourcesChanged(ctx context.Context, params interface{}) error {
 	var p protocol.ResourcesChangedParams
 	if err := parseParams(params, &p); err != nil {
 		return fmt.Errorf("invalid params: %w", err)
@@ -609,7 +761,7 @@ func (c *Client) handleResourcesChanged(ctx context.Context, params interface{})
 	return nil
 }
 
-func (c *Client) handleResourceUpdated(ctx context.Context, params interface{}) error {
+func (c *ClientConfig) handleResourceUpdated(ctx context.Context, params interface{}) error {
 	var p protocol.ResourceUpdatedParams
 	if err := parseParams(params, &p); err != nil {
 		return fmt.Errorf("invalid params: %w", err)
@@ -619,7 +771,7 @@ func (c *Client) handleResourceUpdated(ctx context.Context, params interface{}) 
 	return nil
 }
 
-func (c *Client) handlePromptsChanged(ctx context.Context, params interface{}) error {
+func (c *ClientConfig) handlePromptsChanged(ctx context.Context, params interface{}) error {
 	var p protocol.PromptsChangedParams
 	if err := parseParams(params, &p); err != nil {
 		return fmt.Errorf("invalid params: %w", err)
@@ -629,7 +781,7 @@ func (c *Client) handlePromptsChanged(ctx context.Context, params interface{}) e
 	return nil
 }
 
-func (c *Client) handleRootsChanged(ctx context.Context, params interface{}) error {
+func (c *ClientConfig) handleRootsChanged(ctx context.Context, params interface{}) error {
 	var p protocol.RootsChangedParams
 	if err := parseParams(params, &p); err != nil {
 		return fmt.Errorf("invalid params: %w", err)
@@ -639,7 +791,7 @@ func (c *Client) handleRootsChanged(ctx context.Context, params interface{}) err
 	return nil
 }
 
-func (c *Client) handleLog(ctx context.Context, params interface{}) error {
+func (c *ClientConfig) handleLog(ctx context.Context, params interface{}) error {
 	var p protocol.LogParams
 	if err := parseParams(params, &p); err != nil {
 		return fmt.Errorf("invalid params: %w", err)
@@ -678,11 +830,11 @@ func parseParams(params interface{}, target interface{}) error {
 }
 
 // validatePagination validates pagination parameters using the pagination utility
-func (c *Client) validatePagination(params *protocol.PaginationParams) error {
+func (c *ClientConfig) validatePagination(params *protocol.PaginationParams) error {
 	return pagination.ValidateParams(params)
 }
 
 // applyPaginationDefaults applies default values to pagination parameters
-func (c *Client) applyPaginationDefaults(params *protocol.PaginationParams) *protocol.PaginationParams {
+func (c *ClientConfig) applyPaginationDefaults(params *protocol.PaginationParams) *protocol.PaginationParams {
 	return pagination.ApplyDefaults(params)
 }

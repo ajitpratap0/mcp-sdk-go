@@ -1,3 +1,4 @@
+// Package transport provides various transport mechanisms for MCP communication.
 package transport
 
 import (
@@ -14,9 +15,11 @@ import (
 // ProgressHandler handles progress notifications for streaming operations
 type ProgressHandler func(params interface{}) error
 
-// Transport represents a communication channel between client and server
+// Transport defines the interface for MCP transport mechanisms.
+// Transports are responsible for sending and receiving messages between
+// MCP clients and servers.
 type Transport interface {
-	// Initialize sets up the transport
+	// Initialize prepares the transport for use.
 	Initialize(ctx context.Context) error
 
 	// SendRequest sends a request and returns the response
@@ -40,11 +43,21 @@ type Transport interface {
 	// GenerateID generates a unique ID for requests
 	GenerateID() string
 
-	// Start begins processing messages (blocking)
+	// Start begins reading messages and processing them.
+	// This method blocks until the context is canceled or an error occurs.
 	Start(ctx context.Context) error
 
-	// Stop gracefully shuts down the transport
+	// Stop halts the transport and cleans up resources.
 	Stop(ctx context.Context) error
+
+	// Send transmits a message over the transport.
+	Send(data []byte) error
+
+	// SetReceiveHandler sets the handler for received messages.
+	SetReceiveHandler(handler ReceiveHandler)
+
+	// SetErrorHandler sets the handler for transport errors.
+	SetErrorHandler(handler ErrorHandler)
 }
 
 // RequestHandler handles incoming requests

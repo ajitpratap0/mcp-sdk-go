@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/model-context-protocol/go-mcp/pkg/protocol"
+	"github.com/ajitpratap0/mcp-sdk-go/pkg/protocol"
 )
 
 func TestBaseToolsProvider(t *testing.T) {
@@ -147,11 +147,11 @@ func TestBaseResourcesProvider(t *testing.T) {
 
 	templates := []protocol.ResourceTemplate{
 		{
-			URI:          "template1",
-			Name:         "Template 1",
-			Description:  "Template 1 description",
-			Type:         "template",
-			Parameters:   []protocol.ResourceParameter{},
+			URI:           "template1",
+			Name:          "Template 1",
+			Description:   "Template 1 description",
+			Type:          "template",
+			Parameters:    []protocol.ResourceParameter{},
 			ParameterDefs: map[string]interface{}{"type": "object"},
 		},
 	}
@@ -231,7 +231,7 @@ func TestBaseResourcesProvider(t *testing.T) {
 		t.Fatalf("Expected ReadResource to succeed after update, got error: %v", err)
 	}
 
-	expectedJSON := json.RawMessage([]byte(`{"key": "updated value"}`)) 
+	expectedJSON := json.RawMessage([]byte(`{"key": "updated value"}`))
 	if string(resourceContent.Content) != string(expectedJSON) {
 		t.Errorf("Expected content to match updated value, got %s", resourceContent.Content)
 	}

@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/model-context-protocol/go-mcp/pkg/protocol"
-	"github.com/model-context-protocol/go-mcp/pkg/transport"
+	"github.com/ajitpratap0/mcp-sdk-go/pkg/protocol"
+	"github.com/ajitpratap0/mcp-sdk-go/pkg/transport"
 )
 
 // mockTransport implements the transport.Transport interface for testing
@@ -233,10 +233,10 @@ func TestClientHasCapability(t *testing.T) {
 
 	// Initialize with server info
 	client.serverInfo = &protocol.ServerInfo{
-		Name: "test-server",
+		Name:    "test-server",
 		Version: "1.0.0",
 	}
-	
+
 	// The client's capability is already set to true in the New call above
 	if !client.HasCapability(protocol.CapabilityTools) {
 		t.Error("Expected HasCapability to return true for enabled capability")

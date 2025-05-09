@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/model-context-protocol/go-mcp/pkg/protocol"
-	"github.com/model-context-protocol/go-mcp/pkg/transport"
+	"github.com/ajitpratap0/mcp-sdk-go/pkg/protocol"
+	"github.com/ajitpratap0/mcp-sdk-go/pkg/transport"
 )
 
 // Server represents an MCP server

@@ -11,9 +11,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/model-context-protocol/go-mcp/pkg/client"
-	"github.com/model-context-protocol/go-mcp/pkg/protocol"
-	"github.com/model-context-protocol/go-mcp/pkg/transport"
+	"github.com/ajitpratap0/mcp-sdk-go/pkg/client"
+	"github.com/ajitpratap0/mcp-sdk-go/pkg/protocol"
+	"github.com/ajitpratap0/mcp-sdk-go/pkg/transport"
 )
 
 const (
@@ -24,7 +24,7 @@ func main() {
 	// Configure logging
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 	log.Println("Starting MCP Streamable HTTP Client Example")
-	
+
 	// Create a context that can be canceled on interrupt
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -45,7 +45,7 @@ func main() {
 	t.SetHeader("User-Agent", "MCP-Streamable-Client/1.0")
 	// Set Origin header for security validation
 	t.SetHeader("Origin", "http://localhost")
-	
+
 	// Note: We don't need to set a session ID manually anymore as the transport
 	// will automatically handle session management based on the server's response
 	// When the server returns a MCP-Session-ID header, the transport will store and use it
@@ -150,7 +150,7 @@ func main() {
 			callToolsBatch(ctx, c, tools, t)
 		}
 	}
-	
+
 	// Note: We're using the original transport instance directly
 	// In a real application, you'd typically have a client method to access the transport
 	{
@@ -162,12 +162,12 @@ func main() {
 			sessionID := field.String()
 			if sessionID != "" {
 				log.Printf("Server assigned session ID: %s", sessionID)
-				
+
 				// Now demonstrate session termination by sending a DELETE request
 				log.Println("Terminating session explicitly...")
 				termCtx, termCancel := context.WithTimeout(ctx, 5*time.Second)
 				defer termCancel()
-				
+
 				// Create a custom HTTP request to terminate the session
 				req, _ := http.NewRequestWithContext(termCtx, "DELETE", serverURL, nil)
 				req.Header.Set("MCP-Session-ID", sessionID)
@@ -181,7 +181,7 @@ func main() {
 			}
 		}
 	}
-	
+
 	// Wait for a moment to allow logs to be displayed
 	time.Sleep(1 * time.Second)
 	log.Println("Client example completed.")
@@ -222,21 +222,21 @@ func callToolsBatch(ctx context.Context, c *client.Client, tools []protocol.Tool
 			hasCountToTen = true
 		}
 	}
-	
+
 	if hasHello && hasCountToTen {
 		log.Println("Calling multiple tools in a batch...")
-		
+
 		// Prepare the batch requests
 		helloInput, _ := json.Marshal(map[string]string{"name": "Batch Request"})
 		helloReq, _ := protocol.NewRequest("batch-hello", "tools/call", map[string]interface{}{
-			"name": "hello",
+			"name":  "hello",
 			"input": helloInput,
 		})
-		
+
 		countReq, _ := protocol.NewRequest("batch-count", "tools/call", map[string]interface{}{
 			"name": "countToTen",
 		})
-		
+
 		// Send the batch request using our transport instance
 		if err := t.SendBatch(ctx, []interface{}{helloReq, countReq}); err != nil {
 			log.Printf("Error sending batch request: %v", err)

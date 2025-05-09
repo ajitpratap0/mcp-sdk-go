@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/model-context-protocol/go-mcp/pkg/protocol"
+	"github.com/ajitpratap0/mcp-sdk-go/pkg/protocol"
 )
 
 const (

@@ -7,9 +7,9 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/model-context-protocol/go-mcp/pkg/client"
-	"github.com/model-context-protocol/go-mcp/pkg/protocol"
-	"github.com/model-context-protocol/go-mcp/pkg/transport"
+	"github.com/ajitpratap0/mcp-sdk-go/pkg/client"
+	"github.com/ajitpratap0/mcp-sdk-go/pkg/protocol"
+	"github.com/ajitpratap0/mcp-sdk-go/pkg/transport"
 )
 
 func main() {

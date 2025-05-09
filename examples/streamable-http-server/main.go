@@ -11,9 +11,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/model-context-protocol/go-mcp/pkg/protocol"
-	"github.com/model-context-protocol/go-mcp/pkg/server"
-	"github.com/model-context-protocol/go-mcp/pkg/transport"
+	"github.com/ajitpratap0/mcp-sdk-go/pkg/protocol"
+	"github.com/ajitpratap0/mcp-sdk-go/pkg/server"
+	"github.com/ajitpratap0/mcp-sdk-go/pkg/transport"
 )
 
 const (
@@ -26,11 +26,11 @@ func main() {
 
 	// Register the MCP endpoint handler
 	mcpHandler := server.NewStreamableHTTPHandler()
-	
+
 	// Set allowed origins for security (prevent DNS rebinding attacks)
 	// In a production environment, you would restrict this to specific trusted origins
 	mcpHandler.SetAllowedOrigins([]string{"http://localhost", "http://127.0.0.1"})
-	
+
 	handler.Handle("/mcp", mcpHandler)
 
 	// Create a streamable HTTP transport with proper endpoint URL and longer timeout
@@ -54,10 +54,10 @@ func main() {
 
 	// Create server with the streamable transport
 	s := server.New(streamableTransport,
-		server.WithName("StreamableHTTPExample"),
+		server.WithName("StreamableHTTPServer"),
 		server.WithVersion("1.0.0"),
-		server.WithDescription("A streamable HTTP example MCP server"),
-		server.WithHomepage("https://github.com/model-context-protocol/go-mcp"),
+		server.WithDescription("An example MCP server with HTTP+SSE transport"),
+		server.WithHomepage("https://github.com/ajitpratap0/mcp-sdk-go"),
 		server.WithToolsProvider(customToolsProvider),
 		server.WithResourcesProvider(customResourcesProvider),
 		server.WithPromptsProvider(promptsProvider),
@@ -84,7 +84,7 @@ func main() {
 		<-sigChan
 		log.Println("Shutting down...")
 		cancel()
-		
+
 		// Gracefully shut down the HTTP server
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer shutdownCancel()
@@ -169,13 +169,18 @@ func registerExampleTools(provider *server.BaseToolsProvider) *CustomToolsProvid
 	provider.RegisterTool(streamingTool)
 
 	// Create a custom provider that wraps the base provider and implements the tools
-	customProvider := &CustomToolsProvider{BaseToolsProvider: *provider}
+	customProvider := &CustomToolsProvider{provider: provider}
 	return customProvider
 }
 
 // CustomToolsProvider extends BaseToolsProvider to implement the tools
 type CustomToolsProvider struct {
-	server.BaseToolsProvider
+	provider *server.BaseToolsProvider
+}
+
+// ListTools delegates to the base provider
+func (p *CustomToolsProvider) ListTools(ctx context.Context, category string, pagination *protocol.PaginationParams) ([]protocol.Tool, int, string, bool, error) {
+	return p.provider.ListTools(ctx, category, pagination)
 }
 
 // CallTool implements the actual tool execution
@@ -197,49 +202,49 @@ func (p *CustomToolsProvider) CallTool(ctx context.Context, name string, input j
 		// Instead of returning a streaming result directly, we'll use the available fields
 		// in CallToolResult to indicate this is a streaming operation and handle it
 		// using the OperationID
-		
+
 		// Generate a simple unique operation ID using timestamp
 		opID := fmt.Sprintf("stream-%d", time.Now().UnixNano())
-		
+
 		// Start the streaming process in a goroutine
 		go func() {
 			for i := 1; i <= 10; i++ {
 				// In a real implementation, you would send these updates back to the client
 				// through your transport mechanism.
-				
+
 				// Create proper SSE-compatible update that can be streamed
 				update := map[string]interface{}{
 					"operationId": opID,
-					"count": i,        // The current count value
-					"progress": i * 10, // Progress percentage
-					"message": fmt.Sprintf("Processing step %d of 10", i),
-					"partial": i < 10,  // Partial result flag
-					"done": i == 10,    // Completion flag
+					"count":       i,      // The current count value
+					"progress":    i * 10, // Progress percentage
+					"message":     fmt.Sprintf("Processing step %d of 10", i),
+					"partial":     i < 10,  // Partial result flag
+					"done":        i == 10, // Completion flag
 				}
-				
+
 				// Log the update for demonstration purposes
 				updateJSON, _ := json.Marshal(update)
 				fmt.Printf("Stream update: %s\n", string(updateJSON))
-				
+
 				time.Sleep(500 * time.Millisecond) // Delay to demonstrate streaming
 			}
 		}()
-		
+
 		// Return initial response with operationId to track the streaming operation
 		streamingData, _ := json.Marshal(map[string]interface{}{
 			"streaming": true,
-			"message": "Streaming operation started",
+			"message":   "Streaming operation started",
 		})
-		
+
 		return &protocol.CallToolResult{
-			Result: streamingData,
-			Partial: true, // Mark as partial to indicate this is part of streaming operation
+			Result:      streamingData,
+			Partial:     true, // Mark as partial to indicate this is part of streaming operation
 			OperationID: opID, // Use OperationID to track this specific streaming operation
 		}, nil
 
 	default:
 		// Call the parent implementation
-		return p.BaseToolsProvider.CallTool(ctx, name, input, contextData)
+		return p.provider.CallTool(ctx, name, input, contextData)
 	}
 }
 
@@ -309,13 +314,23 @@ func registerExampleResources(provider *server.BaseResourcesProvider) *CustomRes
 	provider.RegisterTemplate(template)
 
 	// Create a custom provider that wraps the base provider and implements resources
-	customProvider := &CustomResourcesProvider{BaseResourcesProvider: *provider}
+	customProvider := &CustomResourcesProvider{provider: provider}
 	return customProvider
 }
 
 // CustomResourcesProvider extends BaseResourcesProvider to implement resource reading
 type CustomResourcesProvider struct {
-	server.BaseResourcesProvider
+	provider *server.BaseResourcesProvider
+}
+
+// ListResources delegates to the base provider
+func (p *CustomResourcesProvider) ListResources(ctx context.Context, uri string, recursive bool, pagination *protocol.PaginationParams) ([]protocol.Resource, []protocol.ResourceTemplate, int, string, bool, error) {
+	return p.provider.ListResources(ctx, uri, recursive, pagination)
+}
+
+// SubscribeResource delegates to the base provider
+func (p *CustomResourcesProvider) SubscribeResource(ctx context.Context, uri string, recursive bool) (bool, error) {
+	return p.provider.SubscribeResource(ctx, uri, recursive)
 }
 
 // ReadResource implements custom resource reading
@@ -368,7 +383,7 @@ func (p *CustomResourcesProvider) ReadResource(ctx context.Context, uri string, 
 
 	default:
 		// Call the parent implementation
-		return p.BaseResourcesProvider.ReadResource(ctx, uri, templateParams, rangeOpt)
+		return p.provider.ReadResource(ctx, uri, templateParams, rangeOpt)
 	}
 }
 
@@ -384,8 +399,8 @@ func registerExamplePrompts(provider *server.BasePromptsProvider) {
 				Content: "You are a helpful assistant.",
 			},
 			{
-				Role:    "user",
-				Content: "Hello, my name is {{name}}. {{question}}",
+				Role:       "user",
+				Content:    "Hello, my name is {{name}}. {{question}}",
 				Parameters: []string{"name", "question"},
 			},
 		},

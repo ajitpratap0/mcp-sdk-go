@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/model-context-protocol/go-mcp/pkg/protocol"
-	"github.com/model-context-protocol/go-mcp/pkg/transport"
+	"github.com/ajitpratap0/mcp-sdk-go/pkg/protocol"
+	"github.com/ajitpratap0/mcp-sdk-go/pkg/transport"
 )
 
 // HTTPHandler implements http.Handler for MCP
@@ -87,7 +87,7 @@ func (h *HTTPHandler) handlePostRequest(w http.ResponseWriter, r *http.Request) 
 			fmt.Fprintf(w, "Invalid JSON-RPC request: %v", err)
 			return
 		}
-		
+
 		h.handleRequest(w, r.Context(), &req)
 	} else if protocol.IsNotification(body) {
 		// Handle JSON-RPC notification
@@ -97,7 +97,7 @@ func (h *HTTPHandler) handlePostRequest(w http.ResponseWriter, r *http.Request) 
 			fmt.Fprintf(w, "Invalid JSON-RPC notification: %v", err)
 			return
 		}
-		
+
 		h.handleNotification(r.Context(), &notif)
 		w.WriteHeader(http.StatusAccepted) // 202 Accepted for notifications as per spec
 	} else {
@@ -111,7 +111,7 @@ func (h *HTTPHandler) handlePostRequest(w http.ResponseWriter, r *http.Request) 
 func (h *HTTPHandler) handleRequest(w http.ResponseWriter, ctx context.Context, req *protocol.Request) {
 	var response *protocol.Response
 	var err error
-	
+
 	if h.transport == nil {
 		response, err = protocol.NewErrorResponse(req.ID, protocol.InternalError, "Transport not properly configured", nil)
 	} else {
@@ -119,7 +119,7 @@ func (h *HTTPHandler) handleRequest(w http.ResponseWriter, ctx context.Context, 
 		h.mu.Lock()
 		tmp := h.transport
 		h.mu.Unlock()
-		
+
 		// Try to invoke the handler through the transport's implementation
 		result, handlerErr := tmp.SendRequest(ctx, req.Method, req.Params)
 		if handlerErr != nil {
@@ -128,14 +128,14 @@ func (h *HTTPHandler) handleRequest(w http.ResponseWriter, ctx context.Context, 
 			response, err = protocol.NewResponse(req.ID, result)
 		}
 	}
-	
+
 	// Handle marshaling error
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintf(w, "Error creating response: %v", err)
 		return
 	}
-	
+
 	// Send response
 	w.Header().Set("Content-Type", "application/json")
 	jsonResp, err := json.Marshal(response)
@@ -152,11 +152,11 @@ func (h *HTTPHandler) handleNotification(ctx context.Context, notif *protocol.No
 	h.mu.Lock()
 	transport := h.transport
 	h.mu.Unlock()
-	
+
 	if transport == nil {
 		return
 	}
-	
+
 	// Use SendNotification instead of trying to access handlers directly
 	go func() {
 		_ = transport.SendNotification(ctx, notif.Method, notif.Params)

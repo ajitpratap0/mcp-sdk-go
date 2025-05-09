@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/model-context-protocol/go-mcp/pkg/pagination"
-	"github.com/model-context-protocol/go-mcp/pkg/protocol"
-	"github.com/model-context-protocol/go-mcp/pkg/transport"
+	"github.com/ajitpratap0/mcp-sdk-go/pkg/pagination"
+	"github.com/ajitpratap0/mcp-sdk-go/pkg/protocol"
+	"github.com/ajitpratap0/mcp-sdk-go/pkg/transport"
 )
 
 // Client represents an MCP client

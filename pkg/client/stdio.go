@@ -4,15 +4,15 @@ import (
 	"context"
 	"os"
 
-	"github.com/model-context-protocol/go-mcp/pkg/protocol"
-	"github.com/model-context-protocol/go-mcp/pkg/transport"
+	"github.com/ajitpratap0/mcp-sdk-go/pkg/protocol"
+	"github.com/ajitpratap0/mcp-sdk-go/pkg/transport"
 )
 
 // NewStdioClient creates a new client that communicates over stdin/stdout.
 // According to the MCP specification, clients should support stdio whenever possible.
 func NewStdioClient(options ...ClientOption) *Client {
 	t := transport.NewStdioTransport()
-	
+
 	// Apply default options
 	defaultOptions := []ClientOption{
 		WithName("go-mcp-client"),
@@ -20,15 +20,15 @@ func NewStdioClient(options ...ClientOption) *Client {
 		WithCapability(protocol.CapabilitySampling, true),
 		WithCapability(protocol.CapabilityLogging, true),
 	}
-	
+
 	// Create the client
 	c := New(t, defaultOptions...)
-	
+
 	// Apply user options (overriding defaults)
 	for _, option := range options {
 		option(c)
 	}
-	
+
 	return c
 }
 
@@ -36,7 +36,7 @@ func NewStdioClient(options ...ClientOption) *Client {
 // reader/writer streams instead of stdin/stdout.
 func NewStdioClientWithStreams(reader, writer *os.File, options ...ClientOption) *Client {
 	t := transport.NewStdioTransportWithStreams(reader, writer)
-	
+
 	// Apply default options
 	defaultOptions := []ClientOption{
 		WithName("go-mcp-client"),
@@ -44,15 +44,15 @@ func NewStdioClientWithStreams(reader, writer *os.File, options ...ClientOption)
 		WithCapability(protocol.CapabilitySampling, true),
 		WithCapability(protocol.CapabilityLogging, true),
 	}
-	
+
 	// Create the client
 	c := New(t, defaultOptions...)
-	
+
 	// Apply user options (overriding defaults)
 	for _, option := range options {
 		option(c)
 	}
-	
+
 	return c
 }
 
@@ -63,7 +63,7 @@ func (c *Client) InitializeAndStart(ctx context.Context) error {
 	if err := c.Initialize(ctx); err != nil {
 		return err
 	}
-	
+
 	// Start the transport in a goroutine
 	go func() {
 		err := c.transport.Start(ctx)
@@ -73,6 +73,6 @@ func (c *Client) InitializeAndStart(ctx context.Context) error {
 			os.Stderr.WriteString("Error in transport: " + err.Error() + "\n")
 		}
 	}()
-	
+
 	return nil
 }

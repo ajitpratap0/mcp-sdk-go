@@ -11,7 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/model-context-protocol/go-mcp/pkg/protocol"
+	"github.com/ajitpratap0/mcp-sdk-go/pkg/protocol"
 )
 
 // HTTPTransport implements Transport using HTTP with Server-Sent Events (SSE)

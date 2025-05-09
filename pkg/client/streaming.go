@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/model-context-protocol/go-mcp/pkg/protocol"
+	"github.com/ajitpratap0/mcp-sdk-go/pkg/protocol"
 )
 
 // StreamingUpdateHandler is a function that processes streaming updates from a tool call
@@ -84,7 +84,7 @@ func (c *Client) CallToolStreaming(ctx context.Context, name string, input inter
 		// Extract the data from the progress notification and send it to the update channel
 		var progress struct {
 			Data json.RawMessage `json:"data"`
-			Done bool           `json:"done"`
+			Done bool            `json:"done"`
 		}
 
 		if err := json.Unmarshal(progressData, &progress); err == nil {
@@ -113,9 +113,9 @@ func (c *Client) CallToolStreaming(ctx context.Context, name string, input inter
 
 		// Create custom parameters with streaming flag
 		streamingParams := map[string]interface{}{
-			"name":       name,
-			"streaming":  true,
-			"requestId":  requestID,
+			"name":      name,
+			"streaming": true,
+			"requestId": requestID,
 		}
 
 		if params.Input != nil {
@@ -160,7 +160,7 @@ func (c *Client) CallToolStreaming(ctx context.Context, name string, input inter
 		return nil, err
 	case result := <-resultCh:
 		// Got a result
-		cancel() // Cancel the streaming context
+		cancel()  // Cancel the streaming context
 		wg.Wait() // Wait for streaming to complete
 		return result, nil
 	}

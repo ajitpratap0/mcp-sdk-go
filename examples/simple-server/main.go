@@ -10,9 +10,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/model-context-protocol/go-mcp/pkg/protocol"
-	"github.com/model-context-protocol/go-mcp/pkg/server"
-	"github.com/model-context-protocol/go-mcp/pkg/transport"
+	"github.com/ajitpratap0/mcp-sdk-go/pkg/protocol"
+	"github.com/ajitpratap0/mcp-sdk-go/pkg/server"
+	"github.com/ajitpratap0/mcp-sdk-go/pkg/transport"
 )
 
 func main() {
@@ -36,7 +36,7 @@ func main() {
 		server.WithName("SimpleExample"),
 		server.WithVersion("1.0.0"),
 		server.WithDescription("A simple example MCP server"),
-		server.WithHomepage("https://github.com/model-context-protocol/go-mcp"),
+		server.WithHomepage("https://github.com/ajitpratap0/mcp-sdk-go"),
 		server.WithToolsProvider(customToolsProvider),
 		server.WithResourcesProvider(customResourcesProvider),
 		server.WithPromptsProvider(promptsProvider),
@@ -123,13 +123,18 @@ func registerExampleTools(provider *server.BaseToolsProvider) *CustomToolsProvid
 	provider.RegisterTool(timeTool)
 
 	// Create a custom provider that wraps the base provider and implements the tools
-	customProvider := &CustomToolsProvider{BaseToolsProvider: *provider}
+	customProvider := &CustomToolsProvider{provider: provider}
 	return customProvider
 }
 
 // CustomToolsProvider extends BaseToolsProvider to implement the tools
 type CustomToolsProvider struct {
-	server.BaseToolsProvider
+	provider *server.BaseToolsProvider
+}
+
+// ListTools delegates to the base provider
+func (p *CustomToolsProvider) ListTools(ctx context.Context, category string, pagination *protocol.PaginationParams) ([]protocol.Tool, int, string, bool, error) {
+	return p.provider.ListTools(ctx, category, pagination)
 }
 
 // CallTool implements the actual tool execution
@@ -157,7 +162,7 @@ func (p *CustomToolsProvider) CallTool(ctx context.Context, name string, input j
 
 	default:
 		// Call the parent implementation
-		return p.BaseToolsProvider.CallTool(ctx, name, input, contextData)
+		return p.provider.CallTool(ctx, name, input, contextData)
 	}
 }
 
@@ -227,13 +232,23 @@ func registerExampleResources(provider *server.BaseResourcesProvider) *CustomRes
 	provider.RegisterTemplate(template)
 
 	// Create a custom provider that wraps the base provider and implements resources
-	customProvider := &CustomResourcesProvider{BaseResourcesProvider: *provider}
+	customProvider := &CustomResourcesProvider{provider: provider}
 	return customProvider
 }
 
 // CustomResourcesProvider extends BaseResourcesProvider to implement resource reading
 type CustomResourcesProvider struct {
-	server.BaseResourcesProvider
+	provider *server.BaseResourcesProvider
+}
+
+// ListResources delegates to the base provider
+func (p *CustomResourcesProvider) ListResources(ctx context.Context, uri string, recursive bool, pagination *protocol.PaginationParams) ([]protocol.Resource, []protocol.ResourceTemplate, int, string, bool, error) {
+	return p.provider.ListResources(ctx, uri, recursive, pagination)
+}
+
+// SubscribeResource delegates to the base provider
+func (p *CustomResourcesProvider) SubscribeResource(ctx context.Context, uri string, recursive bool) (bool, error) {
+	return p.provider.SubscribeResource(ctx, uri, recursive)
 }
 
 // ReadResource implements custom resource reading
@@ -286,7 +301,7 @@ func (p *CustomResourcesProvider) ReadResource(ctx context.Context, uri string, 
 
 	default:
 		// Call the parent implementation
-		return p.BaseResourcesProvider.ReadResource(ctx, uri, templateParams, rangeOpt)
+		return p.provider.ReadResource(ctx, uri, templateParams, rangeOpt)
 	}
 }
 
@@ -302,8 +317,8 @@ func registerExamplePrompts(provider *server.BasePromptsProvider) {
 				Content: "You are a helpful assistant.",
 			},
 			{
-				Role:    "user",
-				Content: "Hello, my name is {{name}}. {{question}}",
+				Role:       "user",
+				Content:    "Hello, my name is {{name}}. {{question}}",
 				Parameters: []string{"name", "question"},
 			},
 		},
@@ -347,9 +362,9 @@ func registerExamplePrompts(provider *server.BasePromptsProvider) {
 				Content: "You are an expert code reviewer. Analyze the following code and provide constructive feedback.",
 			},
 			{
-				Role:        "user",
-				Content:     "Please review this {{language}} code: {{code}}",
-				Parameters:  []string{"language", "code"},
+				Role:         "user",
+				Content:      "Please review this {{language}} code: {{code}}",
+				Parameters:   []string{"language", "code"},
 				ResourceRefs: []string{"code"},
 			},
 		},

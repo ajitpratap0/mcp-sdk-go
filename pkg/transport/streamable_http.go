@@ -13,7 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/model-context-protocol/go-mcp/pkg/protocol"
+	"github.com/ajitpratap0/mcp-sdk-go/pkg/protocol"
 )
 
 // StreamableHTTPTransport implements Transport using the Streamable HTTP protocol

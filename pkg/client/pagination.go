@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/model-context-protocol/go-mcp/pkg/pagination"
-	"github.com/model-context-protocol/go-mcp/pkg/protocol"
+	"github.com/ajitpratap0/mcp-sdk-go/pkg/pagination"
+	"github.com/ajitpratap0/mcp-sdk-go/pkg/protocol"
 )
 
 // PaginatedFetchFunc is a function that fetches a single page of results
@@ -20,7 +20,7 @@ func FetchAllPages(ctx context.Context, initialParams *protocol.PaginationParams
 
 	// Apply defaults
 	params := pagination.ApplyDefaults(initialParams)
-	
+
 	// Create collector
 	collector := pagination.NewCollector()
 	var allResults []interface{}
@@ -34,7 +34,7 @@ func FetchAllPages(ctx context.Context, initialParams *protocol.PaginationParams
 
 		// Update collector state
 		collector.Update(result)
-		
+
 		// Extract items based on the type
 		switch typedItems := items.(type) {
 		case []interface{}:
@@ -111,12 +111,12 @@ func (c *Client) ListAllResources(ctx context.Context, uri string, recursive boo
 	// Create fetch function
 	fetchFunc := func(ctx context.Context, params *protocol.PaginationParams) (*protocol.PaginationResult, interface{}, error) {
 		resources, templates, pagResult, err := c.ListResources(ctx, uri, recursive, params)
-		
+
 		// Accumulate templates (which aren't part of the normal pagination)
 		if err == nil && len(templates) > 0 {
 			allTemplates = append(allTemplates, templates...)
 		}
-		
+
 		return pagResult, resources, err
 	}
 

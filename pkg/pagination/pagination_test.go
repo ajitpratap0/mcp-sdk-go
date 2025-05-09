@@ -3,7 +3,7 @@ package pagination
 import (
 	"testing"
 
-	"github.com/model-context-protocol/go-mcp/pkg/protocol"
+	"github.com/ajitpratap0/mcp-sdk-go/pkg/protocol"
 )
 
 func TestValidateParams(t *testing.T) {
@@ -242,7 +242,7 @@ func TestCollector(t *testing.T) {
 	// Test NextParams
 	collector = NewCollector() // Reset collector
 	collector.NextCursor = "test-cursor"
-	
+
 	// With nil base params
 	params := collector.NextParams(nil)
 	if params.Cursor != "test-cursor" {
@@ -251,7 +251,7 @@ func TestCollector(t *testing.T) {
 	if params.Limit != DefaultLimit {
 		t.Errorf("Expected NextParams to use DefaultLimit, got %d", params.Limit)
 	}
-	
+
 	// With custom base params
 	baseParams := &protocol.PaginationParams{
 		Limit: 25,

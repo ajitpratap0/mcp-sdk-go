@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/model-context-protocol/go-mcp/pkg/protocol"
+	"github.com/ajitpratap0/mcp-sdk-go/pkg/protocol"
 )
 
 // ProgressHandler handles progress notifications for streaming operations

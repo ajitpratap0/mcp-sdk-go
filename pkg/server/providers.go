@@ -4,14 +4,14 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/model-context-protocol/go-mcp/pkg/protocol"
+	"github.com/ajitpratap0/mcp-sdk-go/pkg/protocol"
 )
 
 // ToolsProvider defines the interface for providing tools functionality
 type ToolsProvider interface {
 	// ListTools returns a list of available tools
 	ListTools(ctx context.Context, category string, pagination *protocol.PaginationParams) ([]protocol.Tool, int, string, bool, error)
-	
+
 	// CallTool executes a tool and returns the result
 	CallTool(ctx context.Context, name string, input json.RawMessage, contextData json.RawMessage) (*protocol.CallToolResult, error)
 }
@@ -20,10 +20,10 @@ type ToolsProvider interface {
 type ResourcesProvider interface {
 	// ListResources returns a list of available resources
 	ListResources(ctx context.Context, uri string, recursive bool, pagination *protocol.PaginationParams) ([]protocol.Resource, []protocol.ResourceTemplate, int, string, bool, error)
-	
+
 	// ReadResource reads a resource and returns its contents
 	ReadResource(ctx context.Context, uri string, templateParams map[string]interface{}, rangeOpt *protocol.ResourceRange) (*protocol.ResourceContents, error)
-	
+
 	// SubscribeResource subscribes to resource changes
 	SubscribeResource(ctx context.Context, uri string, recursive bool) (bool, error)
 }
@@ -32,7 +32,7 @@ type ResourcesProvider interface {
 type PromptsProvider interface {
 	// ListPrompts returns a list of available prompts
 	ListPrompts(ctx context.Context, tag string, pagination *protocol.PaginationParams) ([]protocol.Prompt, int, string, bool, error)
-	
+
 	// GetPrompt returns a specific prompt
 	GetPrompt(ctx context.Context, id string) (*protocol.Prompt, error)
 }
@@ -69,7 +69,7 @@ func (p *BaseToolsProvider) RegisterTool(tool protocol.Tool) {
 // ListTools returns all registered tools
 func (p *BaseToolsProvider) ListTools(ctx context.Context, category string, pagination *protocol.PaginationParams) ([]protocol.Tool, int, string, bool, error) {
 	var tools []protocol.Tool
-	
+
 	for _, tool := range p.tools {
 		// Filter by category if specified
 		if category != "" {
@@ -84,38 +84,38 @@ func (p *BaseToolsProvider) ListTools(ctx context.Context, category string, pagi
 				continue
 			}
 		}
-		
+
 		tools = append(tools, tool)
 	}
-	
+
 	// Simple pagination (in a real implementation, this would be more sophisticated)
 	total := len(tools)
 	limit := pagination.Limit
 	if limit <= 0 {
 		limit = 50 // Default limit
 	}
-	
+
 	start := 0
 	if pagination.Cursor != "" {
 		// In a real implementation, parse the cursor to get the start index
 		// For simplicity, we just use 0 here
 	}
-	
+
 	end := start + limit
 	if end > total {
 		end = total
 	}
-	
+
 	hasMore := end < total
 	nextCursor := ""
 	if hasMore {
 		nextCursor = "cursor_" + string(rune(end)) // Simple string cursor
 	}
-	
+
 	if start < total {
 		return tools[start:end], total, nextCursor, hasMore, nil
 	}
-	
+
 	return []protocol.Tool{}, total, nextCursor, hasMore, nil
 }
 
@@ -130,16 +130,16 @@ func (p *BaseToolsProvider) CallTool(ctx context.Context, name string, input jso
 
 // BaseResourcesProvider provides a simple implementation of ResourcesProvider
 type BaseResourcesProvider struct {
-	resources  map[string]protocol.Resource
-	templates  map[string]protocol.ResourceTemplate
+	resources   map[string]protocol.Resource
+	templates   map[string]protocol.ResourceTemplate
 	subscribers map[string]bool
 }
 
 // NewBaseResourcesProvider creates a new BaseResourcesProvider
 func NewBaseResourcesProvider() *BaseResourcesProvider {
 	return &BaseResourcesProvider{
-		resources:  make(map[string]protocol.Resource),
-		templates:  make(map[string]protocol.ResourceTemplate),
+		resources:   make(map[string]protocol.Resource),
+		templates:   make(map[string]protocol.ResourceTemplate),
 		subscribers: make(map[string]bool),
 	}
 }
@@ -158,7 +158,7 @@ func (p *BaseResourcesProvider) RegisterTemplate(template protocol.ResourceTempl
 func (p *BaseResourcesProvider) ListResources(ctx context.Context, uri string, recursive bool, pagination *protocol.PaginationParams) ([]protocol.Resource, []protocol.ResourceTemplate, int, string, bool, error) {
 	var resources []protocol.Resource
 	var templates []protocol.ResourceTemplate
-	
+
 	// Filter resources by URI prefix if specified
 	if uri != "" {
 		for _, resource := range p.resources {
@@ -166,7 +166,7 @@ func (p *BaseResourcesProvider) ListResources(ctx context.Context, uri string, r
 				resources = append(resources, resource)
 			}
 		}
-		
+
 		for _, template := range p.templates {
 			if template.URI == uri || (recursive && hasPrefix(template.URI, uri+"/")) {
 				templates = append(templates, template)
@@ -176,53 +176,53 @@ func (p *BaseResourcesProvider) ListResources(ctx context.Context, uri string, r
 		for _, resource := range p.resources {
 			resources = append(resources, resource)
 		}
-		
+
 		for _, template := range p.templates {
 			templates = append(templates, template)
 		}
 	}
-	
+
 	// Simple pagination (in a real implementation, this would be more sophisticated)
 	totalResources := len(resources)
 	totalTemplates := len(templates)
 	total := totalResources + totalTemplates
-	
+
 	limit := pagination.Limit
 	if limit <= 0 {
 		limit = 50 // Default limit
 	}
-	
+
 	start := 0
 	if pagination.Cursor != "" {
 		// In a real implementation, parse the cursor to get the start index
 		// For simplicity, we just use 0 here
 	}
-	
+
 	// Apply pagination to resources first, then templates
 	resStart := start
 	resEnd := min(totalResources, start+limit)
-	
+
 	templStart := max(0, resEnd-start)
 	templEnd := min(totalTemplates, templStart+limit-(resEnd-resStart))
-	
+
 	hasMore := resEnd < totalResources || templEnd < totalTemplates
 	nextCursor := ""
 	if hasMore {
 		nextCursor = "cursor_" + string(rune(resEnd)) + "_" + string(rune(templEnd)) // Simple string cursor
 	}
-	
+
 	if resStart < totalResources {
 		resources = resources[resStart:resEnd]
 	} else {
 		resources = []protocol.Resource{}
 	}
-	
+
 	if templStart < totalTemplates {
 		templates = templates[templStart:templEnd]
 	} else {
 		templates = []protocol.ResourceTemplate{}
 	}
-	
+
 	return resources, templates, total, nextCursor, hasMore, nil
 }
 
@@ -264,7 +264,7 @@ func (p *BasePromptsProvider) RegisterPrompt(prompt protocol.Prompt) {
 // ListPrompts returns all registered prompts
 func (p *BasePromptsProvider) ListPrompts(ctx context.Context, tag string, pagination *protocol.PaginationParams) ([]protocol.Prompt, int, string, bool, error) {
 	var prompts []protocol.Prompt
-	
+
 	// Filter prompts by tag if specified
 	if tag != "" {
 		for _, prompt := range p.prompts {
@@ -280,39 +280,39 @@ func (p *BasePromptsProvider) ListPrompts(ctx context.Context, tag string, pagin
 			prompts = append(prompts, prompt)
 		}
 	}
-	
+
 	// Simple pagination (in a real implementation, this would be more sophisticated)
 	total := len(prompts)
 	limit := 50 // Default limit
 	start := 0
-	
+
 	// Handle pagination if provided
 	if pagination != nil {
 		if pagination.Limit > 0 {
 			limit = pagination.Limit
 		}
-		
+
 		if pagination.Cursor != "" {
 			// In a real implementation, parse the cursor to get the start index
 			// For simplicity, we just use 0 here
 		}
 	}
-	
+
 	end := start + limit
 	if end > total {
 		end = total
 	}
-	
+
 	hasMore := end < total
 	nextCursor := ""
 	if hasMore {
 		nextCursor = "cursor_" + string(rune(end)) // Simple string cursor
 	}
-	
+
 	if start < total {
 		return prompts[start:end], total, nextCursor, hasMore, nil
 	}
-	
+
 	return []protocol.Prompt{}, total, nextCursor, hasMore, nil
 }
 
@@ -322,7 +322,7 @@ func (p *BasePromptsProvider) GetPrompt(ctx context.Context, id string) (*protoc
 	if !ok {
 		return nil, errNotFound("prompt", id)
 	}
-	
+
 	return &prompt, nil
 }
 
@@ -346,7 +346,7 @@ func (p *BaseRootsProvider) RegisterRoot(root protocol.Root) {
 // ListRoots returns all registered roots
 func (p *BaseRootsProvider) ListRoots(ctx context.Context, tag string, pagination *protocol.PaginationParams) ([]protocol.Root, int, string, bool, error) {
 	var roots []protocol.Root
-	
+
 	// Filter roots by tag if specified
 	if tag != "" {
 		for _, root := range p.roots {
@@ -362,35 +362,35 @@ func (p *BaseRootsProvider) ListRoots(ctx context.Context, tag string, paginatio
 			roots = append(roots, root)
 		}
 	}
-	
+
 	// Simple pagination (in a real implementation, this would be more sophisticated)
 	total := len(roots)
 	limit := pagination.Limit
 	if limit <= 0 {
 		limit = 50 // Default limit
 	}
-	
+
 	start := 0
 	if pagination.Cursor != "" {
 		// In a real implementation, parse the cursor to get the start index
 		// For simplicity, we just use 0 here
 	}
-	
+
 	end := start + limit
 	if end > total {
 		end = total
 	}
-	
+
 	hasMore := end < total
 	nextCursor := ""
 	if hasMore {
 		nextCursor = "cursor_" + string(rune(end)) // Simple string cursor
 	}
-	
+
 	if start < total {
 		return roots[start:end], total, nextCursor, hasMore, nil
 	}
-	
+
 	return []protocol.Root{}, total, nextCursor, hasMore, nil
 }
 

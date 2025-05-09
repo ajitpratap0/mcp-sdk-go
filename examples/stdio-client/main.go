@@ -9,8 +9,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/model-context-protocol/go-mcp/pkg/client"
-	"github.com/model-context-protocol/go-mcp/pkg/protocol"
+	"github.com/ajitpratap0/mcp-sdk-go/pkg/client"
+	"github.com/ajitpratap0/mcp-sdk-go/pkg/protocol"
 )
 
 func main() {
@@ -83,7 +83,7 @@ func main() {
 	// Demo: Sample request if server supports
 	if c.HasCapability(protocol.CapabilitySampling) {
 		log.Println("Sending a sample request...")
-		
+
 		// Create sample parameters
 		params := &protocol.SampleParams{
 			Messages: []protocol.Message{
@@ -93,9 +93,9 @@ func main() {
 				},
 			},
 			SystemPrompt: "You are a helpful assistant.",
-			Stream:      true,  // Request streaming response
+			Stream:       true, // Request streaming response
 		}
-		
+
 		// Process streaming results
 		err := c.Sample(ctx, params, func(result *protocol.SampleResult) error {
 			if result != nil {
@@ -103,7 +103,7 @@ func main() {
 			}
 			return nil
 		})
-		
+
 		if err != nil {
 			log.Printf("Sample error: %v", err)
 		} else {

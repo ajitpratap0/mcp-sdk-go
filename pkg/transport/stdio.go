@@ -13,7 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/model-context-protocol/go-mcp/pkg/protocol"
+	"github.com/ajitpratap0/mcp-sdk-go/pkg/protocol"
 )
 
 // StdioTransport implements Transport using stdin/stdout.
@@ -42,15 +42,15 @@ func NewStdioTransport(options ...Option) *StdioTransport {
 func NewStdioTransportWithStreams(reader io.Reader, writer io.Writer, options ...Option) *StdioTransport {
 	opts := NewOptions(options...)
 	scanner := bufio.NewScanner(reader)
-	
+
 	// Use a 1MB buffer to handle large JSON messages
 	const maxScanTokenSize = 1024 * 1024
 	buf := make([]byte, maxScanTokenSize)
 	scanner.Buffer(buf, maxScanTokenSize)
-	
+
 	// Create a buffered writer to improve performance while ensuring line-buffering
 	bufWriter := bufio.NewWriter(writer)
-	
+
 	return &StdioTransport{
 		BaseTransport:   NewBaseTransport(),
 		reader:          reader,
@@ -76,28 +76,28 @@ func (t *StdioTransport) Initialize(ctx context.Context) error {
 // SendRequest sends a request and waits for the response
 func (t *StdioTransport) SendRequest(ctx context.Context, method string, params interface{}) (interface{}, error) {
 	id := fmt.Sprintf("%s-%d", t.requestIDPrefix, t.GetNextID())
-	
+
 	req, err := protocol.NewRequest(id, method, params)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-	
+
 	reqCtx, cancel := context.WithTimeout(ctx, t.options.RequestTimeout)
 	defer cancel()
-	
+
 	if err := t.sendMessage(req); err != nil {
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
-	
+
 	resp, err := t.WaitForResponse(reqCtx, id)
 	if err != nil {
 		return nil, fmt.Errorf("failed waiting for response: %w", err)
 	}
-	
+
 	if resp.Error != nil {
 		return nil, fmt.Errorf("server error: %s (code: %d)", resp.Error.Message, resp.Error.Code)
 	}
-	
+
 	return resp.Result, nil
 }
 
@@ -107,7 +107,7 @@ func (t *StdioTransport) SendNotification(ctx context.Context, method string, pa
 	if err != nil {
 		return fmt.Errorf("failed to create notification: %w", err)
 	}
-	
+
 	return t.sendMessage(notif)
 }
 
@@ -116,9 +116,9 @@ func (t *StdioTransport) Start(ctx context.Context) error {
 	if !t.running.CompareAndSwap(false, true) {
 		return fmt.Errorf("transport already running")
 	}
-	
+
 	defer t.running.Store(false)
-	
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -131,12 +131,12 @@ func (t *StdioTransport) Start(ctx context.Context) error {
 				// EOF
 				return nil
 			}
-			
+
 			line := t.scanner.Text()
 			if strings.TrimSpace(line) == "" {
 				continue
 			}
-			
+
 			if err := t.handleMessage(ctx, []byte(line)); err != nil {
 				log.Printf("Error handling message: %v", err)
 			}
@@ -156,27 +156,27 @@ func (t *StdioTransport) Stop(ctx context.Context) error {
 func (t *StdioTransport) sendMessage(message interface{}) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	
+
 	data, err := json.Marshal(message)
 	if err != nil {
 		return fmt.Errorf("failed to marshal message: %w", err)
 	}
-	
+
 	// Write message as a single line
 	if _, err = t.bufWriter.Write(data); err != nil {
 		return fmt.Errorf("failed to write data: %w", err)
 	}
-	
+
 	// Add newline
 	if err = t.bufWriter.WriteByte('\n'); err != nil {
 		return fmt.Errorf("failed to write newline: %w", err)
 	}
-	
+
 	// Flush to ensure the message is sent immediately
 	if err = t.bufWriter.Flush(); err != nil {
 		return fmt.Errorf("failed to flush buffer: %w", err)
 	}
-	
+
 	return nil
 }
 
@@ -187,32 +187,32 @@ func (t *StdioTransport) handleMessage(ctx context.Context, data []byte) error {
 		if err := json.Unmarshal(data, &req); err != nil {
 			return fmt.Errorf("failed to unmarshal request: %w", err)
 		}
-		
+
 		resp, err := t.HandleRequest(ctx, &req)
 		if err != nil {
 			errResp, _ := protocol.NewErrorResponse(req.ID, protocol.InternalError, err.Error(), nil)
 			return t.sendMessage(errResp)
 		}
-		
+
 		return t.sendMessage(resp)
-		
+
 	} else if protocol.IsResponse(data) {
 		var resp protocol.Response
 		if err := json.Unmarshal(data, &resp); err != nil {
 			return fmt.Errorf("failed to unmarshal response: %w", err)
 		}
-		
+
 		t.HandleResponse(&resp)
 		return nil
-		
+
 	} else if protocol.IsNotification(data) {
 		var notif protocol.Notification
 		if err := json.Unmarshal(data, &notif); err != nil {
 			return fmt.Errorf("failed to unmarshal notification: %w", err)
 		}
-		
+
 		return t.HandleNotification(ctx, &notif)
-		
+
 	} else {
 		return fmt.Errorf("unknown message type: %s", string(data))
 	}

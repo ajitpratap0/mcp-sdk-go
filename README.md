@@ -2,7 +2,7 @@
 
 A professional, high-performance implementation of the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) specification (2025-03-26) in Go.
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/model-context-protocol/go-mcp.svg)](https://pkg.go.dev/github.com/model-context-protocol/go-mcp)
+[![Go Reference](https://pkg.go.dev/badge/github.com/ajitpratap0/mcp-sdk-go.svg)](https://pkg.go.dev/github.com/ajitpratap0/mcp-sdk-go)
 
 ## Overview
 
@@ -24,7 +24,7 @@ The implementation prioritizes:
 ## Installation
 
 ```bash
-go get github.com/model-context-protocol/go-mcp
+go get github.com/ajitpratap0/mcp-sdk-go
 ```
 
 ## Quick Start
@@ -36,8 +36,8 @@ import (
     "context"
     "log"
     
-    "github.com/model-context-protocol/go-mcp/pkg/client"
-    "github.com/model-context-protocol/go-mcp/pkg/protocol"
+    "github.com/ajitpratap0/mcp-sdk-go/pkg/client"
+    "github.com/ajitpratap0/mcp-sdk-go/pkg/protocol"
 )
 
 func main() {
@@ -88,9 +88,9 @@ import (
     "os/signal"
     "syscall"
     
-    "github.com/model-context-protocol/go-mcp/pkg/protocol"
-    "github.com/model-context-protocol/go-mcp/pkg/server"
-    "github.com/model-context-protocol/go-mcp/pkg/transport"
+    "github.com/ajitpratap0/mcp-sdk-go/pkg/protocol"
+    "github.com/ajitpratap0/mcp-sdk-go/pkg/server"
+    "github.com/ajitpratap0/mcp-sdk-go/pkg/transport"
 )
 
 func main() {

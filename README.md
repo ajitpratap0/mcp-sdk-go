@@ -69,7 +69,7 @@ The implementation prioritizes:
 
 ## Requirements
 
-- Go 1.18 or later
+- Go 1.24.2 or later
 - No external dependencies beyond the Go standard library
 
 ## Installation

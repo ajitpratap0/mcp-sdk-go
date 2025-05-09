@@ -85,11 +85,14 @@ func TestBaseToolsProvider(t *testing.T) {
 		t.Errorf("Expected CallTool to succeed, got error: %v", err)
 	}
 	if result == nil {
-		t.Errorf("Expected CallTool result to not be nil")
+		t.Fatalf("Expected CallTool result to not be nil")
+		return
 	}
 	expectedMessage := "Tool execution not implemented"
 	var resultObj map[string]interface{}
-	json.Unmarshal(result.Result, &resultObj)
+	if err := json.Unmarshal(result.Result, &resultObj); err != nil {
+		t.Fatalf("Failed to unmarshal result: %v", err)
+	}
 	if msg, ok := resultObj["message"]; !ok || msg != expectedMessage {
 		t.Errorf("Expected message '%s', got %v", expectedMessage, resultObj)
 	}
@@ -205,7 +208,9 @@ func TestBaseResourcesProvider(t *testing.T) {
 		Type:    "application/json",
 		Content: json.RawMessage(`{"key": "updated value"}`),
 	}
-	provider.UpdateResource(updatedResource, updatedContent)
+	if err := provider.UpdateResource(updatedResource, updatedContent); err != nil {
+		t.Fatalf("Expected UpdateResource to succeed, got error: %v", err)
+	}
 
 	resultResources, _, _, _, err = provider.ListResources(ctx, "", false, nil)
 	if err != nil {

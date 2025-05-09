@@ -4,41 +4,41 @@ import "encoding/json"
 
 // Prompt represents a prompt in the MCP protocol
 type Prompt struct {
-	ID          string             `json:"id"`
-	Name        string             `json:"name,omitempty"`
-	Description string             `json:"description,omitempty"`
-	Messages    []PromptMessage    `json:"messages"`
-	Parameters  []PromptParameter  `json:"parameters,omitempty"`
-	Schema      json.RawMessage    `json:"schema,omitempty"`
-	Examples    []PromptExample    `json:"examples,omitempty"`
+	ID          string                 `json:"id"`
+	Name        string                 `json:"name,omitempty"`
+	Description string                 `json:"description,omitempty"`
+	Messages    []PromptMessage        `json:"messages"`
+	Parameters  []PromptParameter      `json:"parameters,omitempty"`
+	Schema      json.RawMessage        `json:"schema,omitempty"`
+	Examples    []PromptExample        `json:"examples,omitempty"`
 	Metadata    map[string]interface{} `json:"metadata,omitempty"`
-	Tags        []string           `json:"tags,omitempty"`
+	Tags        []string               `json:"tags,omitempty"`
 }
 
 // PromptMessage defines a message in a prompt
 type PromptMessage struct {
-	Role        string          `json:"role"`
-	Content     string          `json:"content"`
-	Name        string          `json:"name,omitempty"`
-	ResourceRefs []string       `json:"resourceRefs,omitempty"`
-	Parameters   []string       `json:"parameters,omitempty"`
+	Role         string   `json:"role"`
+	Content      string   `json:"content"`
+	Name         string   `json:"name,omitempty"`
+	ResourceRefs []string `json:"resourceRefs,omitempty"`
+	Parameters   []string `json:"parameters,omitempty"`
 }
 
 // PromptParameter defines a parameter for a prompt
 type PromptParameter struct {
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-	Type        string `json:"type,omitempty"`
-	Required    bool   `json:"required"`
+	Name        string      `json:"name"`
+	Description string      `json:"description,omitempty"`
+	Type        string      `json:"type,omitempty"`
+	Required    bool        `json:"required"`
 	Default     interface{} `json:"default,omitempty"`
 }
 
 // PromptExample provides an example of prompt usage
 type PromptExample struct {
-	Name       string                 `json:"name"`
-	Description string                `json:"description,omitempty"`
-	Parameters map[string]interface{} `json:"parameters"`
-	Result     string                 `json:"result,omitempty"`
+	Name        string                 `json:"name"`
+	Description string                 `json:"description,omitempty"`
+	Parameters  map[string]interface{} `json:"parameters"`
+	Result      string                 `json:"result,omitempty"`
 }
 
 // ListPromptsParams defines parameters for listing prompts

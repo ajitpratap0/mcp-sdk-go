@@ -23,21 +23,21 @@ type CompleteResult struct {
 
 // ModelPreferences defines preferences for AI model selection and parameters
 type ModelPreferences struct {
-	Model              string                 `json:"model,omitempty"`
-	ProviderID         string                 `json:"providerId,omitempty"`
-	Temperature        float64                `json:"temperature,omitempty"`
-	TopP               float64                `json:"topP,omitempty"`
-	MaxTokens          int                    `json:"maxTokens,omitempty"`
-	StopSequences      []string               `json:"stopSequences,omitempty"`
-	FrequencyPenalty   float64                `json:"frequencyPenalty,omitempty"`
-	PresencePenalty    float64                `json:"presencePenalty,omitempty"`
-	ResponseFormat     *ResponseFormat        `json:"responseFormat,omitempty"`
-	AdditionalOptions  map[string]interface{} `json:"additionalOptions,omitempty"`
+	Model             string                 `json:"model,omitempty"`
+	ProviderID        string                 `json:"providerId,omitempty"`
+	Temperature       float64                `json:"temperature,omitempty"`
+	TopP              float64                `json:"topP,omitempty"`
+	MaxTokens         int                    `json:"maxTokens,omitempty"`
+	StopSequences     []string               `json:"stopSequences,omitempty"`
+	FrequencyPenalty  float64                `json:"frequencyPenalty,omitempty"`
+	PresencePenalty   float64                `json:"presencePenalty,omitempty"`
+	ResponseFormat    *ResponseFormat        `json:"responseFormat,omitempty"`
+	AdditionalOptions map[string]interface{} `json:"additionalOptions,omitempty"`
 }
 
 // ResponseFormat defines the expected format of the completion response
 type ResponseFormat struct {
-	Type  string                 `json:"type"`
-	Schema json.RawMessage       `json:"schema,omitempty"`
+	Type    string                 `json:"type"`
+	Schema  json.RawMessage        `json:"schema,omitempty"`
 	Options map[string]interface{} `json:"options,omitempty"`
 }

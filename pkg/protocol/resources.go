@@ -20,13 +20,13 @@ type Resource struct {
 
 // ResourceTemplate defines a template for dynamically generated resources
 type ResourceTemplate struct {
-	URI          string                 `json:"uri"`
-	Name         string                 `json:"name,omitempty"`
-	Description  string                 `json:"description,omitempty"`
-	Type         string                 `json:"type"`
-	Parameters   []ResourceParameter    `json:"parameters"`
+	URI           string                 `json:"uri"`
+	Name          string                 `json:"name,omitempty"`
+	Description   string                 `json:"description,omitempty"`
+	Type          string                 `json:"type"`
+	Parameters    []ResourceParameter    `json:"parameters"`
 	ParameterDefs map[string]interface{} `json:"parameterDefs,omitempty"`
-	Examples     []ResourceExample      `json:"examples,omitempty"`
+	Examples      []ResourceExample      `json:"examples,omitempty"`
 }
 
 // ResourceParameter defines a parameter for a resource template
@@ -46,23 +46,23 @@ type ResourceExample struct {
 
 // ResourceContents contains the content of a resource
 type ResourceContents struct {
-	URI      string          `json:"uri"`
-	Type     string          `json:"type"`
-	Content  json.RawMessage `json:"content"`
-	Encoding string          `json:"encoding,omitempty"`
+	URI      string            `json:"uri"`
+	Type     string            `json:"type"`
+	Content  json.RawMessage   `json:"content"`
+	Encoding string            `json:"encoding,omitempty"`
 	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
 // ListResourcesParams defines parameters for listing resources
 type ListResourcesParams struct {
-	URI      string `json:"uri,omitempty"`
+	URI       string `json:"uri,omitempty"`
 	Recursive bool   `json:"recursive,omitempty"`
 	PaginationParams
 }
 
 // ListResourcesResult defines the response for listing resources
 type ListResourcesResult struct {
-	Resources []Resource `json:"resources"`
+	Resources []Resource         `json:"resources"`
 	Templates []ResourceTemplate `json:"templates,omitempty"`
 	PaginationResult
 }
@@ -107,7 +107,7 @@ type ResourcesChangedParams struct {
 
 // ResourceUpdatedParams defines parameters for the resourceUpdated notification
 type ResourceUpdatedParams struct {
-	URI      string          `json:"uri"`
+	URI      string           `json:"uri"`
 	Contents ResourceContents `json:"contents,omitempty"`
-	Deleted  bool            `json:"deleted,omitempty"`
+	Deleted  bool             `json:"deleted,omitempty"`
 }

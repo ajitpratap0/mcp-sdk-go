@@ -162,7 +162,9 @@ func (t *StreamableHTTPTransport) createEventSource(streamID string) (*Streamabl
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
+		if err := resp.Body.Close(); err != nil {
+			return nil, fmt.Errorf("error closing response body: %w", err)
+		}
 		if resp.StatusCode == http.StatusMethodNotAllowed {
 			return nil, fmt.Errorf("server does not support GET for SSE (405 Method Not Allowed)")
 		}
@@ -170,7 +172,9 @@ func (t *StreamableHTTPTransport) createEventSource(streamID string) (*Streamabl
 	}
 
 	if !strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
-		resp.Body.Close()
+		if err := resp.Body.Close(); err != nil {
+			return nil, fmt.Errorf("error closing response body: %w", err)
+		}
 		return nil, fmt.Errorf("server did not return text/event-stream content type")
 	}
 
@@ -392,7 +396,9 @@ func (t *StreamableHTTPTransport) sendHTTPRequest(message interface{}, streamID 
 
 			if len(body) > 0 {
 				// Process the response
-				t.handleMessage(context.Background(), body)
+				if err := t.handleMessage(context.Background(), body); err != nil {
+					return fmt.Errorf("failed to process message: %w", err)
+				}
 			}
 		}
 	}
@@ -628,7 +634,9 @@ func (es *StreamableEventSource) Connect() error {
 
 	// Check response
 	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
+		if err := resp.Body.Close(); err != nil {
+			return fmt.Errorf("error closing response body: %w", err)
+		}
 		return fmt.Errorf("failed to connect: HTTP %d", resp.StatusCode)
 	}
 
@@ -651,7 +659,10 @@ func (es *StreamableEventSource) Close() {
 	}
 
 	if es.Connection != nil && es.Connection.Body != nil {
-		es.Connection.Body.Close()
+		if err := es.Connection.Body.Close(); err != nil {
+			// Just log the error as we're in a cleanup path
+			fmt.Printf("Error closing connection body: %v\n", err)
+		}
 	}
 
 	es.isConnected.Store(false)
@@ -664,7 +675,10 @@ func (es *StreamableEventSource) readEvents() {
 		es.isConnected.Store(false)
 
 		if es.Connection != nil && es.Connection.Body != nil {
-			es.Connection.Body.Close()
+			if err := es.Connection.Body.Close(); err != nil {
+				// Just log the error as we're in a cleanup path
+				fmt.Printf("Error closing connection body: %v\n", err)
+			}
 		}
 
 		// Notify of disconnection
@@ -727,8 +741,11 @@ func (es *StreamableEventSource) readEvents() {
 			eventType = strings.TrimPrefix(line, "event:")
 			eventType = strings.TrimSpace(eventType)
 		} else if strings.HasPrefix(line, "retry:") {
-			// Handle retry directive - could be used to set reconnection time
-			// Currently we don't use this, but we could add a configurable retry timer
+			// Handle retry directive if needed in the future
+			retryStr := strings.TrimPrefix(line, "retry:")
+			retryStr = strings.TrimSpace(retryStr)
+			// Currently unused but could parse retry time if needed
+			_ = retryStr
 		}
 	}
 

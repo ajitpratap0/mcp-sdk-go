@@ -92,7 +92,9 @@ func (t *StdioTransport) Start(ctx context.Context) error {
 // Stop halts the transport and cleans up resources.
 func (t *StdioTransport) Stop(ctx context.Context) error {
 	close(t.done)
-	t.writer.Flush()
+	if err := t.writer.Flush(); err != nil {
+		return fmt.Errorf("error flushing writer: %w", err)
+	}
 	return nil
 }
 

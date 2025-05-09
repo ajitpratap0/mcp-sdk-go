@@ -69,8 +69,9 @@ func main() {
 
 	// Create the HTTP server
 	httpServer := &http.Server{
-		Addr:    serverAddr,
-		Handler: handler,
+		Addr:              serverAddr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second, // Add timeout to prevent Slowloris attacks
 	}
 
 	// Create a context that is canceled on interrupt signal
@@ -88,7 +89,9 @@ func main() {
 		// Gracefully shut down the HTTP server
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer shutdownCancel()
-		httpServer.Shutdown(shutdownCtx)
+		if err := httpServer.Shutdown(shutdownCtx); err != nil {
+			log.Printf("HTTP server shutdown error: %v", err)
+		}
 	}()
 
 	// Start the server (non-blocking)

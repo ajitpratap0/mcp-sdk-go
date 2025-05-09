@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"sync"
 	"time"
@@ -144,7 +145,9 @@ func (h *HTTPHandler) handleRequest(w http.ResponseWriter, ctx context.Context, 
 		fmt.Fprintf(w, "Error marshaling response: %v", err)
 		return
 	}
-	w.Write(jsonResp)
+	if _, err := w.Write(jsonResp); err != nil {
+		log.Printf("Error writing response: %v", err)
+	}
 }
 
 // handleNotification processes a JSON-RPC notification (no response)
@@ -206,12 +209,8 @@ func (h *HTTPHandler) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
 
-	// Handle client disconnection
-	notify := w.(http.CloseNotifier).CloseNotify()
-	go func() {
-		<-notify
-		ticker.Stop()
-	}()
+	// Handle client disconnection using context
+	ctx := r.Context()
 
 	// Send an initial event
 	fmt.Fprintf(w, "event: ready\ndata: {}\n\n")
@@ -220,9 +219,7 @@ func (h *HTTPHandler) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 	// Keep the connection alive
 	for {
 		select {
-		case <-r.Context().Done():
-			return
-		case <-notify:
+		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			fmt.Fprintf(w, ": ping\n\n")

@@ -13,10 +13,10 @@ func TestCompleteParams(t *testing.T) {
 			{Role: "user", Content: "func main() {"},
 		},
 		ModelPreferences: &ModelPreferences{
-			Model:     "gpt-4",
-			MaxTokens: 50,
+			Model:       "gpt-4",
+			MaxTokens:   50,
 			Temperature: 0.7,
-			TopP: 1.0,
+			TopP:        1.0,
 		},
 	}
 
@@ -74,10 +74,10 @@ func TestCompleteParams(t *testing.T) {
 func TestCompleteResult(t *testing.T) {
 	// Test CompleteResult creation
 	result := CompleteResult{
-		Content: "    fmt.Println(\"Hello, World!\")\n}",
-		Model: "gpt-4",
+		Content:      "    fmt.Println(\"Hello, World!\")\n}",
+		Model:        "gpt-4",
 		FinishReason: "stop",
-		Metadata: json.RawMessage(`{"usage":{"prompt_tokens":10,"completion_tokens":8,"total_tokens":18}}`),
+		Metadata:     json.RawMessage(`{"usage":{"prompt_tokens":10,"completion_tokens":8,"total_tokens":18}}`),
 	}
 
 	// Verify fields

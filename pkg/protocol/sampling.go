@@ -11,16 +11,16 @@ type Message struct {
 
 // SampleParams defines parameters for the sample request
 type SampleParams struct {
-	Messages         []Message              `json:"messages"`
-	ModelPreferences *ModelPreferences      `json:"modelPreferences,omitempty"`
-	SystemPrompt     string                 `json:"systemPrompt,omitempty"`
-	IncludeContext   bool                   `json:"includeContext,omitempty"`
-	ResourceRefs     []string               `json:"resourceRefs,omitempty"`
-	AdditionalContext json.RawMessage       `json:"additionalContext,omitempty"`
-	RequestID        string                 `json:"requestId,omitempty"`
-	MaxTokens        int                    `json:"maxTokens,omitempty"`
-	Stream           bool                   `json:"stream,omitempty"`
-	Options          map[string]interface{} `json:"options,omitempty"`
+	Messages          []Message              `json:"messages"`
+	ModelPreferences  *ModelPreferences      `json:"modelPreferences,omitempty"`
+	SystemPrompt      string                 `json:"systemPrompt,omitempty"`
+	IncludeContext    bool                   `json:"includeContext,omitempty"`
+	ResourceRefs      []string               `json:"resourceRefs,omitempty"`
+	AdditionalContext json.RawMessage        `json:"additionalContext,omitempty"`
+	RequestID         string                 `json:"requestId,omitempty"`
+	MaxTokens         int                    `json:"maxTokens,omitempty"`
+	Stream            bool                   `json:"stream,omitempty"`
+	Options           map[string]interface{} `json:"options,omitempty"`
 }
 
 // SampleResult defines the response for the sample request
@@ -41,9 +41,9 @@ type TokenUsage struct {
 
 // SampleStreamParams defines parameters for streamed sample results
 type SampleStreamParams struct {
-	RequestID   string `json:"requestId"`
-	Content     string `json:"content"`
-	IsFinal     bool   `json:"isFinal,omitempty"`
+	RequestID    string `json:"requestId"`
+	Content      string `json:"content"`
+	IsFinal      bool   `json:"isFinal,omitempty"`
 	FinishReason string `json:"finishReason,omitempty"`
 }
 

@@ -18,30 +18,30 @@ const (
 	MethodCapability    = "capability"
 
 	// Methods for server features
-	MethodListTools      = "listTools"
-	MethodCallTool       = "callTool"
-	MethodToolsChanged   = "toolsChanged"
-	MethodListResources  = "listResources"
-	MethodReadResource   = "readResource"
-	MethodResourcesChanged = "resourcesChanged"
+	MethodListTools         = "listTools"
+	MethodCallTool          = "callTool"
+	MethodToolsChanged      = "toolsChanged"
+	MethodListResources     = "listResources"
+	MethodReadResource      = "readResource"
+	MethodResourcesChanged  = "resourcesChanged"
 	MethodSubscribeResource = "subscribeResource"
-	MethodResourceUpdated = "resourceUpdated"
-	MethodListPrompts    = "listPrompts"
-	MethodGetPrompt      = "getPrompt"
-	MethodPromptsChanged = "promptsChanged"
-	MethodComplete       = "complete"
-	MethodListRoots      = "listRoots"
-	MethodRootsChanged   = "rootsChanged"
+	MethodResourceUpdated   = "resourceUpdated"
+	MethodListPrompts       = "listPrompts"
+	MethodGetPrompt         = "getPrompt"
+	MethodPromptsChanged    = "promptsChanged"
+	MethodComplete          = "complete"
+	MethodListRoots         = "listRoots"
+	MethodRootsChanged      = "rootsChanged"
 
 	// Methods for client features
 	MethodSample = "sample"
 
 	// Methods for utilities
-	MethodCancel    = "cancel"
-	MethodPing      = "ping"
-	MethodProgress  = "progress"
+	MethodCancel      = "cancel"
+	MethodPing        = "ping"
+	MethodProgress    = "progress"
 	MethodSetLogLevel = "setLogLevel"
-	MethodLog       = "log"
+	MethodLog         = "log"
 )
 
 // CapabilityType defines the types of capabilities in MCP
@@ -50,40 +50,40 @@ type CapabilityType string
 const (
 	// CapabilityTools indicates the server supports tools
 	CapabilityTools CapabilityType = "tools"
-	
+
 	// CapabilityResources indicates the server supports resources
 	CapabilityResources CapabilityType = "resources"
-	
+
 	// CapabilityResourceSubscriptions indicates the server supports resource subscriptions
 	CapabilityResourceSubscriptions CapabilityType = "resourceSubscriptions"
-	
+
 	// CapabilityPrompts indicates the server supports prompts
 	CapabilityPrompts CapabilityType = "prompts"
-	
+
 	// CapabilityComplete indicates the server supports completions
 	CapabilityComplete CapabilityType = "complete"
-	
+
 	// CapabilityRoots indicates client or server supports roots
 	CapabilityRoots CapabilityType = "roots"
-	
+
 	// CapabilitySampling indicates client supports sampling
 	CapabilitySampling CapabilityType = "sampling"
-	
+
 	// CapabilityLogging indicates client or server supports logging
 	CapabilityLogging CapabilityType = "logging"
-	
+
 	// CapabilityPagination indicates server supports pagination
 	CapabilityPagination CapabilityType = "pagination"
 )
 
 // InitializeParams defines the parameters for the initialize request
 type InitializeParams struct {
-	ProtocolVersion string            `json:"protocolVersion"`
-	Name            string            `json:"name"`
-	Version         string            `json:"version"`
-	Capabilities    map[string]bool   `json:"capabilities"`
-	ClientInfo      *ClientInfo       `json:"clientInfo,omitempty"`
-	Trace           string            `json:"trace,omitempty"`
+	ProtocolVersion string                 `json:"protocolVersion"`
+	Name            string                 `json:"name"`
+	Version         string                 `json:"version"`
+	Capabilities    map[string]bool        `json:"capabilities"`
+	ClientInfo      *ClientInfo            `json:"clientInfo,omitempty"`
+	Trace           string                 `json:"trace,omitempty"`
 	FeatureOptions  map[string]interface{} `json:"featureOptions,omitempty"`
 }
 
@@ -164,22 +164,22 @@ type LogLevel string
 const (
 	// LogLevelTrace for highly detailed tracing information
 	LogLevelTrace LogLevel = "trace"
-	
+
 	// LogLevelDebug for debug information
 	LogLevelDebug LogLevel = "debug"
-	
+
 	// LogLevelInfo for general information
 	LogLevelInfo LogLevel = "info"
-	
+
 	// LogLevelWarn for warnings
 	LogLevelWarn LogLevel = "warn"
-	
+
 	// LogLevelError for errors
 	LogLevelError LogLevel = "error"
-	
+
 	// LogLevelFatal for fatal errors
 	LogLevelFatal LogLevel = "fatal"
-	
+
 	// LogLevelOff to disable logging
 	LogLevelOff LogLevel = "off"
 )
@@ -196,10 +196,10 @@ type SetLogLevelResult struct {
 
 // LogParams defines parameters for the log notification
 type LogParams struct {
-	Level   LogLevel  `json:"level"`
-	Message string    `json:"message"`
-	Source  string    `json:"source,omitempty"`
-	Time    time.Time `json:"time,omitempty"`
+	Level   LogLevel        `json:"level"`
+	Message string          `json:"message"`
+	Source  string          `json:"source,omitempty"`
+	Time    time.Time       `json:"time,omitempty"`
 	Data    json.RawMessage `json:"data,omitempty"`
 }
 

@@ -96,10 +96,8 @@ func (p *BaseToolsProvider) ListTools(ctx context.Context, category string, pagi
 	}
 
 	start := 0
-	if pagination.Cursor != "" {
-		// In a real implementation, parse the cursor to get the start index
-		// For simplicity, we just use 0 here
-	}
+	// In a real implementation, we would parse pagination.Cursor to get the start index
+	// For now we always start at index 0
 
 	end := start + limit
 	if end > total {
@@ -193,10 +191,8 @@ func (p *BaseResourcesProvider) ListResources(ctx context.Context, uri string, r
 	}
 
 	start := 0
-	if pagination.Cursor != "" {
-		// In a real implementation, parse the cursor to get the start index
-		// For simplicity, we just use 0 here
-	}
+	// In a real implementation, we would parse pagination.Cursor to get the start index
+	// For now we always start at index 0
 
 	// Apply pagination to resources first, then templates
 	resStart := start
@@ -285,18 +281,8 @@ func (p *BasePromptsProvider) ListPrompts(ctx context.Context, tag string, pagin
 	total := len(prompts)
 	limit := 50 // Default limit
 	start := 0
-
-	// Handle pagination if provided
-	if pagination != nil {
-		if pagination.Limit > 0 {
-			limit = pagination.Limit
-		}
-
-		if pagination.Cursor != "" {
-			// In a real implementation, parse the cursor to get the start index
-			// For simplicity, we just use 0 here
-		}
-	}
+	// In a real implementation, we would parse pagination.Cursor to get the start index
+	// For now we always start at index 0
 
 	end := start + limit
 	if end > total {
@@ -371,10 +357,8 @@ func (p *BaseRootsProvider) ListRoots(ctx context.Context, tag string, paginatio
 	}
 
 	start := 0
-	if pagination.Cursor != "" {
-		// In a real implementation, parse the cursor to get the start index
-		// For simplicity, we just use 0 here
-	}
+	// In a real implementation, we would parse pagination.Cursor to get the start index
+	// For now we always start at index 0
 
 	end := start + limit
 	if end > total {

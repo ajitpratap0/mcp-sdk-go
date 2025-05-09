@@ -160,11 +160,9 @@ func (t *BaseTransport) HandleRequest(ctx context.Context, req *protocol.Request
 		return protocol.NewErrorResponse(req.ID, protocol.MethodNotFound, fmt.Sprintf("Method not found: %s", req.Method), nil)
 	}
 
-	var params interface{}
-	if len(req.Params) > 0 {
-		// The specific parameter type depends on the method
-		// It will be unmarshaled by the handler
-	}
+	// Params are passed through directly to the handler
+	// The handler will determine how to interpret the params
+	params := req.Params
 
 	result, err := handler(ctx, params)
 	if err != nil {

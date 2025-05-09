@@ -51,9 +51,9 @@ func TestInitializeParams(t *testing.T) {
 		Name:            "test-client",
 		Version:         "1.0.0",
 		Capabilities: map[string]bool{
-			string(CapabilityTools):      true,
-			string(CapabilityResources):  true,
-			string(CapabilitySampling):   true,
+			string(CapabilityTools):     true,
+			string(CapabilityResources): true,
+			string(CapabilitySampling):  true,
 		},
 		ClientInfo: &ClientInfo{
 			Name:     "test-client",

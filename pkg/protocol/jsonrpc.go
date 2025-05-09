@@ -62,9 +62,9 @@ func NewRequest(id interface{}, method string, params interface{}) (*Request, er
 
 	return &Request{
 		JSONRPCMessage: JSONRPCMessage{JSONRPC: JSONRPCVersion},
-		ID:      id,
-		Method:  method,
-		Params:  paramsJSON,
+		ID:             id,
+		Method:         method,
+		Params:         paramsJSON,
 	}, nil
 }
 
@@ -89,8 +89,8 @@ func NewResponse(id interface{}, result interface{}) (*Response, error) {
 
 	return &Response{
 		JSONRPCMessage: JSONRPCMessage{JSONRPC: JSONRPCVersion},
-		ID:      id,
-		Result:  resultJSON,
+		ID:             id,
+		Result:         resultJSON,
 	}, nil
 }
 
@@ -108,7 +108,7 @@ func NewErrorResponse(id interface{}, code ErrorCode, message string, data inter
 
 	return &Response{
 		JSONRPCMessage: JSONRPCMessage{JSONRPC: JSONRPCVersion},
-		ID:      id,
+		ID:             id,
 		Error: &Error{
 			Code:    code,
 			Message: message,
@@ -137,8 +137,8 @@ func NewNotification(method string, params interface{}) (*Notification, error) {
 
 	return &Notification{
 		JSONRPCMessage: JSONRPCMessage{JSONRPC: JSONRPCVersion},
-		Method:  method,
-		Params:  paramsJSON,
+		Method:         method,
+		Params:         paramsJSON,
 	}, nil
 }
 

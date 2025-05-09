@@ -75,9 +75,9 @@ func TestPrompt(t *testing.T) {
 func TestPromptMessage(t *testing.T) {
 	// Test basic PromptMessage creation
 	msg := PromptMessage{
-		Role:        "user",
-		Content:     "Test content",
-		Name:        "user1",
+		Role:         "user",
+		Content:      "Test content",
+		Name:         "user1",
 		ResourceRefs: []string{"resource1", "resource2"},
 		Parameters:   []string{"param1", "param2"},
 	}
@@ -291,7 +291,7 @@ func TestPromptsChangedParams(t *testing.T) {
 			{Role: "user", Content: "Added prompt content"},
 		},
 	}
-	
+
 	modifiedPrompt := Prompt{
 		ID:   "modified-prompt",
 		Name: "Modified Prompt",
@@ -299,48 +299,48 @@ func TestPromptsChangedParams(t *testing.T) {
 			{Role: "user", Content: "Modified prompt content"},
 		},
 	}
-	
+
 	// Test PromptsChangedParams creation
 	params := PromptsChangedParams{
 		Added:    []Prompt{addedPrompt},
 		Removed:  []string{"removed-prompt-1", "removed-prompt-2"},
 		Modified: []Prompt{modifiedPrompt},
 	}
-	
+
 	// Verify fields
 	if len(params.Added) != 1 {
 		t.Errorf("Expected 1 added prompt, got %d", len(params.Added))
 	}
-	
+
 	if len(params.Removed) != 2 {
 		t.Errorf("Expected 2 removed prompt IDs, got %d", len(params.Removed))
 	}
-	
+
 	if len(params.Modified) != 1 {
 		t.Errorf("Expected 1 modified prompt, got %d", len(params.Modified))
 	}
-	
+
 	// Test JSON serialization
 	data, err := json.Marshal(params)
 	if err != nil {
 		t.Fatalf("Failed to marshal PromptsChangedParams: %v", err)
 	}
-	
+
 	var decoded PromptsChangedParams
 	err = json.Unmarshal(data, &decoded)
 	if err != nil {
 		t.Fatalf("Failed to unmarshal PromptsChangedParams: %v", err)
 	}
-	
+
 	// Verify decoded data
 	if len(decoded.Added) != len(params.Added) {
 		t.Errorf("Expected %d added prompts after decoding, got %d", len(params.Added), len(decoded.Added))
 	}
-	
+
 	if len(decoded.Removed) != len(params.Removed) {
 		t.Errorf("Expected %d removed prompt IDs after decoding, got %d", len(params.Removed), len(decoded.Removed))
 	}
-	
+
 	if len(decoded.Modified) != len(params.Modified) {
 		t.Errorf("Expected %d modified prompts after decoding, got %d", len(params.Modified), len(decoded.Modified))
 	}

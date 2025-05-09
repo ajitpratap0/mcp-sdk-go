@@ -264,7 +264,9 @@ func (es *EventSource) Connect() error {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
+		if err := resp.Body.Close(); err != nil {
+			return fmt.Errorf("error closing response body: %w", err)
+		}
 		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
@@ -291,7 +293,10 @@ func (es *EventSource) Close() {
 
 	// Close the connection
 	if es.Connection != nil && es.Connection.Body != nil {
-		es.Connection.Body.Close()
+		if err := es.Connection.Body.Close(); err != nil {
+			// Just log the error as we're already in a cleanup path
+			fmt.Printf("Error closing connection body: %v\n", err)
+		}
 		es.Connection = nil
 	}
 
@@ -302,7 +307,10 @@ func (es *EventSource) Close() {
 func (es *EventSource) readEvents() {
 	defer func() {
 		if es.Connection != nil && es.Connection.Body != nil {
-			es.Connection.Body.Close()
+			if err := es.Connection.Body.Close(); err != nil {
+				// Just log the error as we're already in a cleanup path
+				fmt.Printf("Error closing connection body: %v\n", err)
+			}
 		}
 		es.isConnected.Store(false)
 	}()

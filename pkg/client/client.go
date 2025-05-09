@@ -64,7 +64,7 @@ func WithFeatureOptions(options map[string]interface{}) ClientOption {
 // New creates a new MCP client
 func New(t transport.Transport, options ...ClientOption) *Client {
 	ctx, cancel := context.WithCancel(context.Background())
-	
+
 	client := &Client{
 		transport:      t,
 		name:           "go-mcp-client",
@@ -74,17 +74,17 @@ func New(t transport.Transport, options ...ClientOption) *Client {
 		ctx:            ctx,
 		cancel:         cancel,
 	}
-	
+
 	// Apply options
 	for _, option := range options {
 		option(client)
 	}
-	
+
 	// Default capabilities
 	if _, ok := client.capabilities[string(protocol.CapabilitySampling)]; !ok {
 		client.capabilities[string(protocol.CapabilitySampling)] = true
 	}
-	
+
 	// Register notification handlers
 	t.RegisterNotificationHandler(protocol.MethodToolsChanged, client.handleToolsChanged)
 	t.RegisterNotificationHandler(protocol.MethodResourcesChanged, client.handleResourcesChanged)
@@ -92,12 +92,12 @@ func New(t transport.Transport, options ...ClientOption) *Client {
 	t.RegisterNotificationHandler(protocol.MethodPromptsChanged, client.handlePromptsChanged)
 	t.RegisterNotificationHandler(protocol.MethodRootsChanged, client.handleRootsChanged)
 	t.RegisterNotificationHandler(protocol.MethodLog, client.handleLog)
-	
+
 	// Register request handlers
 	t.RegisterRequestHandler(protocol.MethodSample, client.handleSample)
 	t.RegisterRequestHandler(protocol.MethodCancel, client.handleCancel)
 	t.RegisterRequestHandler(protocol.MethodPing, client.handlePing)
-	
+
 	return client
 }
 
@@ -109,19 +109,19 @@ func (c *Client) Initialize(ctx context.Context) error {
 		return nil
 	}
 	c.initializedLock.RUnlock()
-	
+
 	// Initialize transport
 	if err := c.transport.Initialize(ctx); err != nil {
 		return fmt.Errorf("transport initialization failed: %w", err)
 	}
-	
+
 	// Start transport in background
 	go func() {
 		if err := c.transport.Start(c.ctx); err != nil {
 			fmt.Printf("Transport error: %v\n", err)
 		}
 	}()
-	
+
 	// Send initialize request
 	params := &protocol.InitializeParams{
 		ProtocolVersion: protocol.ProtocolRevision,
@@ -135,30 +135,30 @@ func (c *Client) Initialize(ctx context.Context) error {
 		},
 		FeatureOptions: c.featureOptions,
 	}
-	
+
 	result, err := c.transport.SendRequest(ctx, protocol.MethodInitialize, params)
 	if err != nil {
 		return fmt.Errorf("initialize request failed: %w", err)
 	}
-	
+
 	// Parse initialize result
 	var initResult protocol.InitializeResult
 	if err := parseResult(result, &initResult); err != nil {
 		return fmt.Errorf("failed to parse initialize result: %w", err)
 	}
-	
+
 	// Store server info
 	c.serverInfo = initResult.ServerInfo
-	
+
 	// Send initialized notification
 	if err := c.transport.SendNotification(ctx, protocol.MethodInitialized, &protocol.InitializedParams{}); err != nil {
 		return fmt.Errorf("initialized notification failed: %w", err)
 	}
-	
+
 	c.initializedLock.Lock()
 	c.initialized = true
 	c.initializedLock.Unlock()
-	
+
 	return nil
 }
 
@@ -178,7 +178,7 @@ func (c *Client) HasCapability(capability protocol.CapabilityType) bool {
 	if c.serverInfo == nil {
 		return false
 	}
-	
+
 	enabled, ok := c.capabilities[string(capability)]
 	return ok && enabled
 }
@@ -188,35 +188,35 @@ func (c *Client) ListTools(ctx context.Context, category string, pagination *pro
 	if !c.HasCapability(protocol.CapabilityTools) {
 		return nil, nil, errors.New("server does not support tools")
 	}
-	
+
 	// Validate pagination parameters
 	if err := c.validatePagination(pagination); err != nil {
 		return nil, nil, err
 	}
-	
+
 	// Apply defaults and create request params
 	paginationParams := c.applyPaginationDefaults(pagination)
 	params := &protocol.ListToolsParams{
-		Category: category,
+		Category:         category,
 		PaginationParams: *paginationParams,
 	}
-	
+
 	result, err := c.transport.SendRequest(ctx, protocol.MethodListTools, params)
 	if err != nil {
 		return nil, nil, fmt.Errorf("list tools request failed: %w", err)
 	}
-	
+
 	var toolsResult protocol.ListToolsResult
 	if err := parseResult(result, &toolsResult); err != nil {
 		return nil, nil, fmt.Errorf("failed to parse list tools result: %w", err)
 	}
-	
+
 	paginationResult := &protocol.PaginationResult{
 		TotalCount: toolsResult.TotalCount,
 		NextCursor: toolsResult.NextCursor,
 		HasMore:    toolsResult.HasMore,
 	}
-	
+
 	return toolsResult.Tools, paginationResult, nil
 }
 
@@ -225,38 +225,38 @@ func (c *Client) CallTool(ctx context.Context, name string, input interface{}, c
 	if !c.HasCapability(protocol.CapabilityTools) {
 		return nil, errors.New("server does not support tools")
 	}
-	
+
 	var inputJSON, contextJSON json.RawMessage
 	var err error
-	
+
 	if input != nil {
 		if inputJSON, err = json.Marshal(input); err != nil {
 			return nil, fmt.Errorf("failed to marshal input: %w", err)
 		}
 	}
-	
+
 	if context != nil {
 		if contextJSON, err = json.Marshal(context); err != nil {
 			return nil, fmt.Errorf("failed to marshal context: %w", err)
 		}
 	}
-	
+
 	params := &protocol.CallToolParams{
 		Name:    name,
 		Input:   inputJSON,
 		Context: contextJSON,
 	}
-	
+
 	result, err := c.transport.SendRequest(ctx, protocol.MethodCallTool, params)
 	if err != nil {
 		return nil, fmt.Errorf("call tool request failed: %w", err)
 	}
-	
+
 	var toolResult protocol.CallToolResult
 	if err := parseResult(result, &toolResult); err != nil {
 		return nil, fmt.Errorf("failed to parse call tool result: %w", err)
 	}
-	
+
 	return &toolResult, nil
 }
 
@@ -265,36 +265,36 @@ func (c *Client) ListResources(ctx context.Context, uri string, recursive bool, 
 	if !c.HasCapability(protocol.CapabilityResources) {
 		return nil, nil, nil, errors.New("server does not support resources")
 	}
-	
+
 	// Validate pagination parameters
 	if err := c.validatePagination(pagination); err != nil {
 		return nil, nil, nil, err
 	}
-	
+
 	// Apply defaults and create request params
 	paginationParams := c.applyPaginationDefaults(pagination)
 	params := &protocol.ListResourcesParams{
-		URI:       uri,
-		Recursive: recursive,
+		URI:              uri,
+		Recursive:        recursive,
 		PaginationParams: *paginationParams,
 	}
-	
+
 	result, err := c.transport.SendRequest(ctx, protocol.MethodListResources, params)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("list resources request failed: %w", err)
 	}
-	
+
 	var resourcesResult protocol.ListResourcesResult
 	if err := parseResult(result, &resourcesResult); err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to parse list resources result: %w", err)
 	}
-	
+
 	paginationResult := &protocol.PaginationResult{
 		TotalCount: resourcesResult.TotalCount,
 		NextCursor: resourcesResult.NextCursor,
 		HasMore:    resourcesResult.HasMore,
 	}
-	
+
 	return resourcesResult.Resources, resourcesResult.Templates, paginationResult, nil
 }
 
@@ -303,23 +303,23 @@ func (c *Client) ReadResource(ctx context.Context, uri string, templateParams ma
 	if !c.HasCapability(protocol.CapabilityResources) {
 		return nil, errors.New("server does not support resources")
 	}
-	
+
 	params := &protocol.ReadResourceParams{
 		URI:            uri,
 		TemplateParams: templateParams,
 		Range:          rangeOpt,
 	}
-	
+
 	result, err := c.transport.SendRequest(ctx, protocol.MethodReadResource, params)
 	if err != nil {
 		return nil, fmt.Errorf("read resource request failed: %w", err)
 	}
-	
+
 	var readResult protocol.ReadResourceResult
 	if err := parseResult(result, &readResult); err != nil {
 		return nil, fmt.Errorf("failed to parse read resource result: %w", err)
 	}
-	
+
 	return &readResult.Contents, nil
 }
 
@@ -328,26 +328,26 @@ func (c *Client) SubscribeResource(ctx context.Context, uri string, recursive bo
 	if !c.HasCapability(protocol.CapabilityResourceSubscriptions) {
 		return errors.New("server does not support resource subscriptions")
 	}
-	
+
 	params := &protocol.SubscribeResourceParams{
 		URI:       uri,
 		Recursive: recursive,
 	}
-	
+
 	result, err := c.transport.SendRequest(ctx, protocol.MethodSubscribeResource, params)
 	if err != nil {
 		return fmt.Errorf("subscribe resource request failed: %w", err)
 	}
-	
+
 	var subscribeResult protocol.SubscribeResourceResult
 	if err := parseResult(result, &subscribeResult); err != nil {
 		return fmt.Errorf("failed to parse subscribe resource result: %w", err)
 	}
-	
+
 	if !subscribeResult.Success {
 		return errors.New("server declined subscription request")
 	}
-	
+
 	return nil
 }
 
@@ -356,35 +356,35 @@ func (c *Client) ListPrompts(ctx context.Context, tag string, pagination *protoc
 	if !c.HasCapability(protocol.CapabilityPrompts) {
 		return nil, nil, errors.New("server does not support prompts")
 	}
-	
+
 	// Validate pagination parameters
 	if err := c.validatePagination(pagination); err != nil {
 		return nil, nil, err
 	}
-	
+
 	// Apply defaults and create request params
 	paginationParams := c.applyPaginationDefaults(pagination)
 	params := &protocol.ListPromptsParams{
-		Tag: tag,
+		Tag:              tag,
 		PaginationParams: *paginationParams,
 	}
-	
+
 	result, err := c.transport.SendRequest(ctx, protocol.MethodListPrompts, params)
 	if err != nil {
 		return nil, nil, fmt.Errorf("list prompts request failed: %w", err)
 	}
-	
+
 	var promptsResult protocol.ListPromptsResult
 	if err := parseResult(result, &promptsResult); err != nil {
 		return nil, nil, fmt.Errorf("failed to parse list prompts result: %w", err)
 	}
-	
+
 	paginationResult := &protocol.PaginationResult{
 		TotalCount: promptsResult.TotalCount,
 		NextCursor: promptsResult.NextCursor,
 		HasMore:    promptsResult.HasMore,
 	}
-	
+
 	return promptsResult.Prompts, paginationResult, nil
 }
 
@@ -393,21 +393,21 @@ func (c *Client) GetPrompt(ctx context.Context, id string) (*protocol.Prompt, er
 	if !c.HasCapability(protocol.CapabilityPrompts) {
 		return nil, errors.New("server does not support prompts")
 	}
-	
+
 	params := &protocol.GetPromptParams{
 		ID: id,
 	}
-	
+
 	result, err := c.transport.SendRequest(ctx, protocol.MethodGetPrompt, params)
 	if err != nil {
 		return nil, fmt.Errorf("get prompt request failed: %w", err)
 	}
-	
+
 	var promptResult protocol.GetPromptResult
 	if err := parseResult(result, &promptResult); err != nil {
 		return nil, fmt.Errorf("failed to parse get prompt result: %w", err)
 	}
-	
+
 	return &promptResult.Prompt, nil
 }
 
@@ -416,17 +416,17 @@ func (c *Client) Complete(ctx context.Context, params *protocol.CompleteParams) 
 	if !c.HasCapability(protocol.CapabilityComplete) {
 		return nil, errors.New("server does not support completions")
 	}
-	
+
 	result, err := c.transport.SendRequest(ctx, protocol.MethodComplete, params)
 	if err != nil {
 		return nil, fmt.Errorf("complete request failed: %w", err)
 	}
-	
+
 	var completeResult protocol.CompleteResult
 	if err := parseResult(result, &completeResult); err != nil {
 		return nil, fmt.Errorf("failed to parse complete result: %w", err)
 	}
-	
+
 	return &completeResult, nil
 }
 
@@ -435,35 +435,35 @@ func (c *Client) ListRoots(ctx context.Context, tag string, pagination *protocol
 	if !c.HasCapability(protocol.CapabilityRoots) {
 		return nil, nil, errors.New("server does not support roots")
 	}
-	
+
 	// Validate pagination parameters
 	if err := c.validatePagination(pagination); err != nil {
 		return nil, nil, err
 	}
-	
+
 	// Apply defaults and create request params
 	paginationParams := c.applyPaginationDefaults(pagination)
 	params := &protocol.ListRootsParams{
-		Tag: tag,
+		Tag:              tag,
 		PaginationParams: *paginationParams,
 	}
-	
+
 	result, err := c.transport.SendRequest(ctx, protocol.MethodListRoots, params)
 	if err != nil {
 		return nil, nil, fmt.Errorf("list roots request failed: %w", err)
 	}
-	
+
 	var rootsResult protocol.ListRootsResult
 	if err := parseResult(result, &rootsResult); err != nil {
 		return nil, nil, fmt.Errorf("failed to parse list roots result: %w", err)
 	}
-	
+
 	paginationResult := &protocol.PaginationResult{
 		TotalCount: rootsResult.TotalCount,
 		NextCursor: rootsResult.NextCursor,
 		HasMore:    rootsResult.HasMore,
 	}
-	
+
 	return rootsResult.Roots, paginationResult, nil
 }
 
@@ -472,25 +472,25 @@ func (c *Client) SetLogLevel(ctx context.Context, level protocol.LogLevel) error
 	if !c.HasCapability(protocol.CapabilityLogging) {
 		return errors.New("server does not support logging")
 	}
-	
+
 	params := &protocol.SetLogLevelParams{
 		Level: level,
 	}
-	
+
 	result, err := c.transport.SendRequest(ctx, protocol.MethodSetLogLevel, params)
 	if err != nil {
 		return fmt.Errorf("set log level request failed: %w", err)
 	}
-	
+
 	var logResult protocol.SetLogLevelResult
 	if err := parseResult(result, &logResult); err != nil {
 		return fmt.Errorf("failed to parse set log level result: %w", err)
 	}
-	
+
 	if !logResult.Success {
 		return errors.New("server declined log level change")
 	}
-	
+
 	return nil
 }
 
@@ -499,17 +499,17 @@ func (c *Client) Cancel(ctx context.Context, id interface{}) (bool, error) {
 	params := &protocol.CancelParams{
 		ID: id,
 	}
-	
+
 	result, err := c.transport.SendRequest(ctx, protocol.MethodCancel, params)
 	if err != nil {
 		return false, fmt.Errorf("cancel request failed: %w", err)
 	}
-	
+
 	var cancelResult protocol.CancelResult
 	if err := parseResult(result, &cancelResult); err != nil {
 		return false, fmt.Errorf("failed to parse cancel result: %w", err)
 	}
-	
+
 	return cancelResult.Cancelled, nil
 }
 
@@ -518,17 +518,17 @@ func (c *Client) Ping(ctx context.Context) (*protocol.PingResult, error) {
 	params := &protocol.PingParams{
 		Timestamp: time.Now().UnixNano() / int64(time.Millisecond),
 	}
-	
+
 	result, err := c.transport.SendRequest(ctx, protocol.MethodPing, params)
 	if err != nil {
 		return nil, fmt.Errorf("ping request failed: %w", err)
 	}
-	
+
 	var pingResult protocol.PingResult
 	if err := parseResult(result, &pingResult); err != nil {
 		return nil, fmt.Errorf("failed to parse ping result: %w", err)
 	}
-	
+
 	return &pingResult, nil
 }
 
@@ -540,7 +540,7 @@ func (c *Client) SendProgress(ctx context.Context, id interface{}, message strin
 		Percent:   percent,
 		Completed: completed,
 	}
-	
+
 	return c.transport.SendNotification(ctx, protocol.MethodProgress, params)
 }
 
@@ -558,7 +558,7 @@ func (c *Client) handleSample(ctx context.Context, params interface{}) (interfac
 	if err := parseParams(params, &sampleParams); err != nil {
 		return nil, fmt.Errorf("invalid params: %w", err)
 	}
-	
+
 	// Handle sample request (implementation-specific)
 	return nil, errors.New("sampling not implemented in this client")
 }
@@ -568,7 +568,7 @@ func (c *Client) handleCancel(ctx context.Context, params interface{}) (interfac
 	if err := parseParams(params, &cancelParams); err != nil {
 		return nil, fmt.Errorf("invalid params: %w", err)
 	}
-	
+
 	// Cancel operation (implementation-specific)
 	return &protocol.CancelResult{Cancelled: false}, nil
 }
@@ -578,12 +578,12 @@ func (c *Client) handlePing(ctx context.Context, params interface{}) (interface{
 	if err := parseParams(params, &pingParams); err != nil {
 		return nil, fmt.Errorf("invalid params: %w", err)
 	}
-	
+
 	timestamp := pingParams.Timestamp
 	if timestamp == 0 {
 		timestamp = time.Now().UnixNano() / int64(time.Millisecond)
 	}
-	
+
 	return &protocol.PingResult{Timestamp: timestamp}, nil
 }
 
@@ -594,7 +594,7 @@ func (c *Client) handleToolsChanged(ctx context.Context, params interface{}) err
 	if err := parseParams(params, &p); err != nil {
 		return fmt.Errorf("invalid params: %w", err)
 	}
-	
+
 	// Handle tools changed notification (implementation-specific)
 	return nil
 }
@@ -604,7 +604,7 @@ func (c *Client) handleResourcesChanged(ctx context.Context, params interface{})
 	if err := parseParams(params, &p); err != nil {
 		return fmt.Errorf("invalid params: %w", err)
 	}
-	
+
 	// Handle resources changed notification (implementation-specific)
 	return nil
 }
@@ -614,7 +614,7 @@ func (c *Client) handleResourceUpdated(ctx context.Context, params interface{}) 
 	if err := parseParams(params, &p); err != nil {
 		return fmt.Errorf("invalid params: %w", err)
 	}
-	
+
 	// Handle resource updated notification (implementation-specific)
 	return nil
 }
@@ -624,7 +624,7 @@ func (c *Client) handlePromptsChanged(ctx context.Context, params interface{}) e
 	if err := parseParams(params, &p); err != nil {
 		return fmt.Errorf("invalid params: %w", err)
 	}
-	
+
 	// Handle prompts changed notification (implementation-specific)
 	return nil
 }
@@ -634,7 +634,7 @@ func (c *Client) handleRootsChanged(ctx context.Context, params interface{}) err
 	if err := parseParams(params, &p); err != nil {
 		return fmt.Errorf("invalid params: %w", err)
 	}
-	
+
 	// Handle roots changed notification (implementation-specific)
 	return nil
 }
@@ -644,7 +644,7 @@ func (c *Client) handleLog(ctx context.Context, params interface{}) error {
 	if err := parseParams(params, &p); err != nil {
 		return fmt.Errorf("invalid params: %w", err)
 	}
-	
+
 	// Handle log notification (implementation-specific)
 	return nil
 }
@@ -656,11 +656,11 @@ func parseResult(result interface{}, target interface{}) error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal result: %w", err)
 	}
-	
+
 	if err := json.Unmarshal(data, target); err != nil {
 		return fmt.Errorf("failed to unmarshal result: %w", err)
 	}
-	
+
 	return nil
 }
 
@@ -669,11 +669,11 @@ func parseParams(params interface{}, target interface{}) error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal params: %w", err)
 	}
-	
+
 	if err := json.Unmarshal(data, target); err != nil {
 		return fmt.Errorf("failed to unmarshal params: %w", err)
 	}
-	
+
 	return nil
 }
 

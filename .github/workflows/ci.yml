@@ -25,11 +25,17 @@ jobs:
         with:
           version: latest
 
-      - name: Download dependencies
-        run: go mod download
+      - name: Setup dependencies
+        run: |
+          go mod tidy
+          go mod download
+          go build -o /dev/null ./... || true  # Force module resolution
 
       - name: Lint
-        run: golangci-lint run ./... --timeout=5m
+        run: |
+          go version
+          golangci-lint version
+          golangci-lint run ./... --timeout=5m -v
 
   test:
     name: Test

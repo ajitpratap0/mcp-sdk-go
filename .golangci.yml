@@ -5,7 +5,9 @@ run:
   go: '1.24.2'  # Match go.mod version
 
 output:
-  format: colored-line-number
+  # Use the new format to avoid deprecation warnings
+  formats:
+    - format: colored-line-number
 
 linters-settings:
   errcheck:

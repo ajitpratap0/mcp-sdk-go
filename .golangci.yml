@@ -2,8 +2,6 @@
 run:
   timeout: 5m
   tests: true
-  skip-dirs:
-    - vendor
   go: '1.24.2'  # Match go.mod version
 
 output:
@@ -13,8 +11,8 @@ linters-settings:
   errcheck:
     check-type-assertions: true
 
-  govet:
-    check-shadowing: true
+  shadow:
+    strict: false
 
   goimports:
     local-prefixes: github.com/ajitpratap0
@@ -33,6 +31,8 @@ linters:
     - misspell
 
 issues:
+  exclude-dirs:
+    - vendor
   exclude-rules:
     - path: _test\.go
       linters:

@@ -180,70 +180,70 @@ Package client provides the client-side implementation of the MCP protocol, allo
 type Client interface {
     // Initialize initializes the client with the provided context
     Initialize(ctx context.Context) error
-    
+
     // Start starts the client's transport
     Start(ctx context.Context) error
-    
+
     // InitializeAndStart combines Initialize and Start operations
     InitializeAndStart(ctx context.Context) error
-    
+
     // Close closes the client and its transport
     Close() error
-    
+
     // HasCapability checks if a specific capability is supported
     HasCapability(capability string) bool
-    
+
     // Capabilities returns the map of all supported capabilities
     Capabilities() map[string]bool
-    
+
     // ListTools lists available tools from the server
     ListTools(ctx context.Context, query string, pagination *protocol.PaginationRequest) ([]protocol.Tool, *protocol.PaginationResult, error)
-    
+
     // ListAllTools automatically paginates to retrieve all tools matching the query
     ListAllTools(ctx context.Context, query string) ([]protocol.Tool, error)
-    
+
     // GetTool retrieves a specific tool by ID
     GetTool(ctx context.Context, id string) (*protocol.Tool, error)
-    
+
     // InvokeTool invokes a tool with the given parameters
     InvokeTool(ctx context.Context, id string, params map[string]interface{}) (interface{}, error)
-    
+
     // ListResources lists available resources from the server
     ListResources(ctx context.Context, query string, pagination *protocol.PaginationRequest) ([]protocol.Resource, *protocol.PaginationResult, error)
-    
+
     // ListAllResources automatically paginates to retrieve all resources matching the query
     ListAllResources(ctx context.Context, query string) ([]protocol.Resource, error)
-    
+
     // GetResource retrieves a specific resource by ID
     GetResource(ctx context.Context, id string) (*protocol.Resource, error)
-    
+
     // SubscribeResource subscribes to resource updates
     SubscribeResource(ctx context.Context, id string) error
-    
+
     // UnsubscribeResource unsubscribes from resource updates
     UnsubscribeResource(ctx context.Context, id string) error
-    
+
     // ListPrompts lists available prompts from the server
     ListPrompts(ctx context.Context, query string, pagination *protocol.PaginationRequest) ([]protocol.Prompt, *protocol.PaginationResult, error)
-    
+
     // ListAllPrompts automatically paginates to retrieve all prompts matching the query
     ListAllPrompts(ctx context.Context, query string) ([]protocol.Prompt, error)
-    
+
     // GetPrompt retrieves a specific prompt by ID
     GetPrompt(ctx context.Context, id string) (*protocol.Prompt, error)
-    
+
     // GetRoots retrieves the root resources from the server
     GetRoots(ctx context.Context) ([]string, error)
-    
+
     // Complete requests a completion from the server
     Complete(ctx context.Context, request *protocol.CompletionRequest) (*protocol.CompletionResponse, error)
-    
+
     // SetSamplingCallback sets a callback function for sampling events
     SetSamplingCallback(callback SamplingCallback)
-    
+
     // SetResourceChangedCallback sets a callback function for resource change notifications
     SetResourceChangedCallback(callback ResourceChangedCallback)
-    
+
     // RegisterHandler registers a custom method handler
     RegisterHandler(method string, handler MessageHandler)
 }
@@ -318,13 +318,13 @@ Package server provides the server-side implementation of the MCP protocol, allo
 type Server interface {
     // Start starts the server with the provided context
     Start(ctx context.Context) error
-    
+
     // Stop stops the server
     Stop() error
-    
+
     // RegisterErrorHandler registers a custom error handler
     RegisterErrorHandler(handler ErrorHandler)
-    
+
     // RegisterMethodHandler registers a custom method handler
     RegisterMethodHandler(method string, handler MethodHandler)
 }
@@ -350,10 +350,10 @@ MethodHandler handles custom method calls.
 type ToolsProvider interface {
     // ListTools lists the available tools
     ListTools(ctx context.Context, query string, pagination *protocol.PaginationRequest) ([]protocol.Tool, *protocol.PaginationResult, error)
-    
+
     // GetTool gets a specific tool by ID
     GetTool(ctx context.Context, id string) (*protocol.Tool, error)
-    
+
     // InvokeTool invokes a tool with the given parameters
     InvokeTool(ctx context.Context, id string, params map[string]interface{}) (interface{}, error)
 }
@@ -364,16 +364,16 @@ ToolsProvider provides tool-related functionality.
 type ResourcesProvider interface {
     // ListResources lists the available resources
     ListResources(ctx context.Context, query string, pagination *protocol.PaginationRequest) ([]protocol.Resource, *protocol.PaginationResult, error)
-    
+
     // GetResource gets a specific resource by ID
     GetResource(ctx context.Context, id string) (*protocol.Resource, error)
-    
+
     // SubscribeResource subscribes to updates for a resource
     SubscribeResource(ctx context.Context, id string) error
-    
+
     // UnsubscribeResource unsubscribes from updates for a resource
     UnsubscribeResource(ctx context.Context, id string) error
-    
+
     // NotifyResourceChanged notifies subscribers of resource changes
     NotifyResourceChanged(ctx context.Context, id string, value interface{})
 }
@@ -384,7 +384,7 @@ ResourcesProvider provides resource-related functionality.
 type PromptsProvider interface {
     // ListPrompts lists the available prompts
     ListPrompts(ctx context.Context, query string, pagination *protocol.PaginationRequest) ([]protocol.Prompt, *protocol.PaginationResult, error)
-    
+
     // GetPrompt gets a specific prompt by ID
     GetPrompt(ctx context.Context, id string) (*protocol.Prompt, error)
 }
@@ -513,19 +513,19 @@ Package transport provides various transport mechanisms for MCP communication.
 type Transport interface {
     // Initialize initializes the transport
     Initialize() error
-    
+
     // Start starts the transport
     Start(ctx context.Context) error
-    
+
     // Stop stops the transport
     Stop()
-    
+
     // Send sends a message
     Send(data []byte) error
-    
+
     // SetReceiveHandler sets the handler for received messages
     SetReceiveHandler(handler ReceiveHandler)
-    
+
     // SetErrorHandler sets the handler for transport errors
     SetErrorHandler(handler ErrorHandler)
 }
@@ -747,10 +747,10 @@ Package pagination provides utilities for handling paginated operations.
 type Paginator interface {
     // GetNextPage gets the next page of results
     GetNextPage(ctx context.Context) (interface{}, *protocol.PaginationResult, error)
-    
+
     // HasMorePages checks if there are more pages
     HasMorePages() bool
-    
+
     // GetAllPages gets all remaining pages
     GetAllPages(ctx context.Context) (interface{}, error)
 }
@@ -804,7 +804,7 @@ package main
 import (
     "context"
     "log"
-    
+
     "github.com/ajitpratap0/mcp-sdk-go"
 )
 
@@ -817,24 +817,24 @@ func main() {
         mcp.WithClientCapability(mcp.CapabilityTools, true),
         mcp.WithClientCapability(mcp.CapabilityResources, true),
     )
-    
+
     // Initialize and start the client
     ctx := context.Background()
     if err := client.InitializeAndStart(ctx); err != nil {
         log.Fatalf("Failed to initialize client: %v", err)
     }
     defer client.Close()
-    
+
     // List all tools
     tools, err := client.ListAllTools(ctx, "")
     if err != nil {
         log.Fatalf("Failed to list tools: %v", err)
     }
-    
+
     // Process tools
     for _, tool := range tools {
         log.Printf("Tool: %s - %s", tool.Name, tool.Description)
-        
+
         // Invoke a tool if needed
         if tool.ID == "example-tool" {
             result, err := client.InvokeTool(ctx, tool.ID, map[string]interface{}{
@@ -862,7 +862,7 @@ import (
     "os"
     "os/signal"
     "syscall"
-    
+
     "github.com/ajitpratap0/mcp-sdk-go"
 )
 
@@ -870,7 +870,7 @@ func main() {
     // Create providers
     toolsProvider := mcp.NewBaseToolsProvider()
     resourcesProvider := mcp.NewBaseResourcesProvider()
-    
+
     // Add a sample tool
     toolsProvider.AddTool(&protocol.Tool{
         ID:          "sample-tool",
@@ -895,7 +895,7 @@ func main() {
             "params": params,
         }, nil
     })
-    
+
     // Add a sample resource
     resourcesProvider.AddResource(&protocol.Resource{
         ID:          "sample-resource",
@@ -904,7 +904,7 @@ func main() {
         Description: "A sample resource for demonstration",
         Data:        "This is a sample resource content",
     })
-    
+
     // Create server
     server := mcp.NewServer(
         mcp.NewStdioTransport(),
@@ -917,11 +917,11 @@ func main() {
         mcp.WithToolsProvider(toolsProvider),
         mcp.WithResourcesProvider(resourcesProvider),
     )
-    
+
     // Setup graceful shutdown
     ctx, cancel := context.WithCancel(context.Background())
     defer cancel()
-    
+
     sigChan := make(chan os.Signal, 1)
     signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
     go func() {
@@ -929,7 +929,7 @@ func main() {
         log.Println("Shutting down...")
         cancel()
     }()
-    
+
     // Start server
     log.Println("Starting MCP server...")
     if err := server.Start(ctx); err != nil {
@@ -947,7 +947,7 @@ import (
     "context"
     "log"
     "time"
-    
+
     "github.com/ajitpratap0/mcp-sdk-go"
 )
 
@@ -956,21 +956,21 @@ func main() {
     transport := mcp.NewHTTPTransport(
         mcp.WithRequestTimeout(10 * time.Second),
     )
-    
+
     // Create client with HTTP transport
     client := mcp.NewClient(
         transport,
         mcp.WithClientName("HTTPClient"),
         mcp.WithClientVersion("1.0.0"),
     )
-    
+
     // Initialize and start
     ctx := context.Background()
     if err := client.InitializeAndStart(ctx); err != nil {
         log.Fatalf("Failed to initialize client: %v", err)
     }
     defer client.Close()
-    
+
     // Use client...
 }
 ```
@@ -983,7 +983,7 @@ package main
 import (
     "context"
     "log"
-    
+
     "github.com/ajitpratap0/mcp-sdk-go"
     "github.com/ajitpratap0/mcp-sdk-go/pkg/protocol"
 )
@@ -991,25 +991,25 @@ import (
 func main() {
     client := mcp.NewClient(/* ... */)
     ctx := context.Background()
-    
+
     // Manual pagination
     var allTools []protocol.Tool
     pagination := &protocol.PaginationRequest{
         Limit: 10,
     }
-    
+
     for {
         tools, pagResult, err := client.ListTools(ctx, "", pagination)
         if err != nil {
             log.Fatalf("Failed to list tools: %v", err)
         }
-        
+
         allTools = append(allTools, tools...)
-        
+
         if !pagResult.HasMore {
             break
         }
-        
+
         // Update pagination for next request
         if pagResult.Next != "" {
             pagination = &protocol.PaginationRequest{
@@ -1023,15 +1023,15 @@ func main() {
             }
         }
     }
-    
+
     log.Printf("Retrieved %d tools using manual pagination", len(allTools))
-    
+
     // Automatic pagination
     tools, err := client.ListAllTools(ctx, "")
     if err != nil {
         log.Fatalf("Failed to list all tools: %v", err)
     }
-    
+
     log.Printf("Retrieved %d tools using automatic pagination", len(tools))
 }
 ```
@@ -1112,4 +1112,4 @@ The SDK follows semantic versioning:
 2. **Minor Version**: New features in a backward-compatible manner
 3. **Patch Version**: Backward-compatible bug fixes
 
-The version can be accessed through the `Version` constant in the mcp package. 
+The version can be accessed through the `Version` constant in the mcp package.

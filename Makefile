@@ -1,26 +1,58 @@
-.PHONY: all check lint test build format tidy security vulncheck help
+.PHONY: all check lint test build format tidy security vulncheck help precommit install-tools transport-check
 
 GO = go
 GOFMT = gofmt
 GOLINT = golangci-lint
 GOSEC = gosec
 GOVULNCHECK = govulncheck
+PRECOMMIT = pre-commit
 
 all: check
 
 help:
 	@echo "Available commands:"
-	@echo "  make check       - Run all checks (same as GitHub workflow)"
-	@echo "  make lint        - Run golangci-lint"
-	@echo "  make test        - Run tests with race detection"
-	@echo "  make build       - Verify build"
-	@echo "  make format      - Check code formatting"
-	@echo "  make tidy        - Check if go.mod and go.sum are tidy"
-	@echo "  make security    - Run gosec security scan"
-	@echo "  make vulncheck   - Run vulnerability check"
+	@echo "  make check          - Run all checks (same as GitHub workflow)"
+	@echo "  make precommit      - Run pre-commit checks on all files"
+	@echo "  make lint           - Run golangci-lint"
+	@echo "  make test           - Run tests with race detection"
+	@echo "  make build          - Verify build"
+	@echo "  make format         - Check code formatting"
+	@echo "  make tidy           - Check if go.mod and go.sum are tidy"
+	@echo "  make security       - Run gosec security scan"
+	@echo "  make vulncheck      - Run vulnerability check"
+	@echo "  make transport-check - Test transport implementations"
+	@echo "  make install-tools  - Install all development tools"
 
+# Main check target - runs basic checks that the GitHub workflow runs
 check: tidy format lint security vulncheck test build
 	@echo "All checks passed!"
+
+# Run all pre-commit checks (recommended instead of individual checks)
+precommit:
+	@command -v $(PRECOMMIT) >/dev/null 2>&1 || { echo "Error: pre-commit not installed. Run 'make install-tools'"; exit 1; }
+	$(PRECOMMIT) run --all-files
+
+# Transport-specific checks - crucial for testing BaseTransport embedding
+transport-check:
+	@echo "Running transport implementation tests..."
+	$(GO) test -v ./pkg/transport/...
+	@echo "Testing StdioTransport with BaseTransport embedding..."
+	$(GO) test -run TestStdioTransport ./pkg/transport/...
+	@echo "Testing HTTPTransport with custom HTTP client..."
+	$(GO) test -run TestHTTPTransport ./pkg/transport/...
+	@echo "Transport implementation tests complete!"
+
+# Install all development tools
+install-tools:
+	@echo "Installing development tools..."
+	pip install pre-commit
+	go install golang.org/x/tools/gopls@latest
+	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+	go install github.com/securego/gosec/v2/cmd/gosec@latest
+	go install golang.org/x/vuln/cmd/govulncheck@latest
+	go install golang.org/x/tools/cmd/goimports@latest
+	$(PRECOMMIT) install
+	@echo "All development tools installed!"
 
 lint:
 	@command -v $(GOLINT) >/dev/null 2>&1 || { echo "Error: golangci-lint not installed. Run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest"; exit 1; }

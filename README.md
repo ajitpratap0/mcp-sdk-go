@@ -88,7 +88,7 @@ go get github.com/ajitpratap0/mcp-sdk-go
 import (
     "context"
     "log"
-    
+
     "github.com/ajitpratap0/mcp-sdk-go/pkg/client"
     "github.com/ajitpratap0/mcp-sdk-go/pkg/protocol"
 )
@@ -100,14 +100,14 @@ func main() {
         client.WithVersion("1.0.0"),
         client.WithCapability(protocol.CapabilitySampling, true),
     )
-    
+
     // Initialize the client and start the transport in the background
     ctx := context.Background()
     if err := c.InitializeAndStart(ctx); err != nil {
         log.Fatalf("Failed to initialize: %v", err)
     }
     defer c.Close()
-    
+
     // Use client functionality
     if c.HasCapability(protocol.CapabilityTools) {
         // Use automatic pagination to get all tools
@@ -119,7 +119,7 @@ func main() {
                 log.Printf("Tool: %s - %s", tool.Name, tool.Description)
             }
         }
-        
+
         // Or use manual pagination if needed
         tools, pagResult, err := c.ListTools(ctx, "", nil) // uses default pagination
         if err != nil {
@@ -140,7 +140,7 @@ import (
     "os"
     "os/signal"
     "syscall"
-    
+
     "github.com/ajitpratap0/mcp-sdk-go/pkg/protocol"
     "github.com/ajitpratap0/mcp-sdk-go/pkg/server"
     "github.com/ajitpratap0/mcp-sdk-go/pkg/transport"
@@ -149,15 +149,15 @@ import (
 func main() {
     // Create transport
     t := transport.NewStdioTransport()
-    
+
     // Create providers
     toolsProvider := server.NewBaseToolsProvider()
     resourcesProvider := server.NewBaseResourcesProvider()
     promptsProvider := server.NewBasePromptsProvider()
-    
+
     // Configure providers (add tools, resources, prompts)
     // ...
-    
+
     // Create server with providers
     s := server.New(t,
         server.WithName("MyServer"),
@@ -167,18 +167,18 @@ func main() {
         server.WithResourcesProvider(resourcesProvider),
         server.WithPromptsProvider(promptsProvider),
     )
-    
+
     // Set up graceful shutdown
     ctx, cancel := context.WithCancel(context.Background())
     defer cancel()
-    
+
     sigChan := make(chan os.Signal, 1)
     signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
     go func() {
         <-sigChan
         cancel()
     }()
-    
+
     // Start server (blocking)
     log.Println("Starting MCP server...")
     if err := s.Start(ctx); err != nil {

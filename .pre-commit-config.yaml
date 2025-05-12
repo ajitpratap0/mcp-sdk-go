@@ -1,4 +1,11 @@
-# Exhaustive pre-commit configuration for Model Context SDK
+# Comprehensive pre-commit configuration for Model Context SDK
+# This replaces both the legacy bash script and the previous pre-commit config
+
+default_language_version:
+  python: python3
+
+fail_fast: false
+
 repos:
   # Standard file checks
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -17,9 +24,11 @@ repos:
         args: ['--fix=lf']
       - id: check-executables-have-shebangs
 
-  # Go-specific hooks using local tools to avoid external dependencies
+  # Go-specific hooks using local tools
   - repo: local
     hooks:
+      # === CORE COMMIT CHECKS (Run on every commit) ===
+
       # Code formatting
       - id: go-fmt
         name: Go Format
@@ -33,74 +42,51 @@ repos:
       - id: go-imports
         name: Go Imports
         description: Run goimports to format and organize imports
-        entry: bash -c 'command -v goimports >/dev/null 2>&1 || go install golang.org/x/tools/cmd/goimports@latest && goimports -l -w $(find . -type f -name "*.go" -not -path "./vendor/*")'
+        entry: bash -c 'export PATH=$PATH:$(go env GOPATH)/bin && goimports -l -w $(find . -type f -name "*.go" -not -path "./vendor/*")'
         language: system
         types: [go]
         pass_filenames: false
 
-      # Dependency management
+      # Dependency management - from legacy bash script
       - id: go-mod-tidy
         name: Go Mod Tidy
         description: Run go mod tidy to ensure clean dependencies
-        entry: go mod tidy
+        entry: bash -c 'make tidy'
         language: system
         pass_filenames: false
         always_run: true
 
-      # Build verification
+      # Build verification - from legacy bash script
       - id: go-build
         name: Go Build
         description: Verify that the code builds
-        entry: go build -v ./...
+        entry: make build
         language: system
         pass_filenames: false
 
-      # Basic test run
-      - id: go-test
-        name: Go Test
-        description: Run tests with race detection
-        entry: bash -c 'go test -race -short ./...'
-        language: system
-        pass_filenames: false
-        stages: [push]
-
-      # Linting
+      # Linting with auto-install
       - id: golangci-lint
         name: Go Linting
         description: Run golangci-lint with project configuration
-        entry: bash -c 'command -v golangci-lint >/dev/null 2>&1 || go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest && golangci-lint run --timeout=5m'
+        entry: bash -c 'export PATH=$PATH:$(go env GOPATH)/bin && golangci-lint run --timeout=5m -v'
         language: system
         pass_filenames: false
         types: [go]
+        verbose: true
 
-      # Security scanning
-      - id: gosec
-        name: Go Security Check
-        description: Run gosec security scanner
-        entry: bash -c 'command -v gosec >/dev/null 2>&1 || go install github.com/securego/gosec/v2/cmd/gosec@latest && gosec ./...'
-        language: system
-        pass_filenames: false
-        stages: [push]
+      # === TRANSPORT-SPECIFIC CHECKS (Run on relevant file changes) ===
 
-      # Vulnerability checking
-      - id: govulncheck
-        name: Go Vulnerability Check
-        description: Run vulnerability scanning
-        entry: bash -c 'command -v govulncheck >/dev/null 2>&1 || go install golang.org/x/vuln/cmd/govulncheck@latest && govulncheck ./...'
-        language: system
-        pass_filenames: false
-        stages: [push]
-
-      # Transport-specific check
+      # Transport interface compliance - critical for BaseTransport embedding
       - id: transport-interface-check
         name: Transport Interface Check
-        description: Ensure all transport implementations adhere to the interface
+        description: Ensure all transport implementations adhere to the Transport interface
         entry: bash -c 'go test -run TestTransportInterface ./pkg/transport/...'
         language: system
         files: '^pkg/transport/.*\.go$'
         pass_filenames: false
+        verbose: true
 
-      # JSON-RPC compliance
+      # JSON-RPC compliance for protocol implementation
       - id: jsonrpc-check
         name: JSON-RPC Compliance
         description: Verify JSON-RPC message format compliance
@@ -108,3 +94,32 @@ repos:
         language: system
         files: '^pkg/(protocol|transport)/.*\.go$'
         pass_filenames: false
+
+      # === HEAVIER CHECKS (Run post-commit) ===
+
+      # Tests with race detection
+      - id: go-test
+        name: Go Test
+        description: Run tests with race detection
+        entry: make test
+        language: system
+        pass_filenames: false
+        stages: [post-commit]
+
+      # Security scanning with auto-install
+      - id: gosec
+        name: Go Security Check
+        description: Run gosec security scanner
+        entry: bash -c 'export PATH=$PATH:$(go env GOPATH)/bin && gosec ./...'
+        language: system
+        pass_filenames: false
+        stages: [post-commit]
+
+      # Vulnerability checking with auto-install
+      - id: govulncheck
+        name: Go Vulnerability Check
+        description: Run vulnerability scanning
+        entry: bash -c 'export PATH=$PATH:$(go env GOPATH)/bin && govulncheck ./...'
+        language: system
+        pass_filenames: false
+        stages: [post-commit]

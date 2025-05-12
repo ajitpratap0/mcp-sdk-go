@@ -28,4 +28,4 @@ If applicable, add error logs to help explain your problem.
  - SDK Version: [e.g. v0.1.0]
 
 **Additional context**
-Add any other context about the problem here. 
+Add any other context about the problem here.

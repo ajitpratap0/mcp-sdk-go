@@ -54,27 +54,27 @@ print_warning() {
 kill_process_tree() {
   local pid=$1
   local signal=${2:-15}  # Default to SIGTERM
-  
+
   if [ -z "$pid" ]; then
     return
   fi
-  
+
   echo "Killing process tree for PID: $pid"
-  
+
   # Get all child processes
   local children=$(pgrep -P "$pid" 2>/dev/null)
-  
+
   # Recursively kill children first
   for child in $children; do
     kill_process_tree "$child" "$signal"
   done
-  
+
   # Kill the parent process
   if ps -p "$pid" > /dev/null 2>&1; then
     kill -"$signal" "$pid" 2>/dev/null
     # Wait a moment to ensure it's terminated
     sleep 0.5
-    
+
     # Force kill if still running
     if ps -p "$pid" > /dev/null 2>&1; then
       echo "Process $pid still running, sending SIGKILL"
@@ -86,17 +86,17 @@ kill_process_tree() {
 # Kill any stray Go processes from our tests
 kill_stray_go_processes() {
   echo "Looking for stray Go processes..."
-  
+
   # Kill any go-build processes
   if command -v pkill &> /dev/null; then
     # Find and kill any Go binaries that might be our test processes
     pkill -f "go-build" || true
     pkill -f "exe/main" || true
-    
+
     # Find and kill any processes specifically related to our client/server
     pkill -f "$SERVER_DIR" || true
     pkill -f "$CLIENT_DIR" || true
-    
+
     # Look for any Go processes with mcp in the name
     pkill -f "go.*mcp" || true
   else
@@ -107,10 +107,10 @@ kill_stray_go_processes() {
       kill -9 "$pid" 2>/dev/null || true
     done
   fi
-  
+
   # Ensure port is freed
   kill_port $PORT
-  
+
   echo "Stray process cleanup complete."
 }
 
@@ -133,7 +133,7 @@ show_usage() {
 kill_port() {
   local port=$1
   echo "Checking for processes using port $port..."
-  
+
   # For macOS (lsof)
   if command -v lsof &> /dev/null; then
     local pid=$(lsof -ti :$port)
@@ -167,7 +167,7 @@ kill_port() {
     echo "Could not find lsof, ss, or netstat. Unable to check for processes using port $port."
     return 1
   fi
-  
+
   echo "Port $port is now available."
   return 0
 }
@@ -176,19 +176,19 @@ kill_port() {
 find_dir() {
   local dir_name=$1
   local base_dir=$2
-  
+
   # Check direct in base directory
   if [ -d "${base_dir}/${dir_name}" ]; then
     echo "${base_dir}/${dir_name}"
     return 0
   fi
-  
+
   # Check in examples directory
   if [ -d "${base_dir}/${EXAMPLES_DIR}/${dir_name}" ]; then
     echo "${base_dir}/${EXAMPLES_DIR}/${dir_name}"
     return 0
   fi
-  
+
   # No directory found
   return 1
 }
@@ -196,24 +196,24 @@ find_dir() {
 # Cleanup function for graceful shutdown
 do_cleanup() {
   print_header "CLEANUP"
-  
+
   # Collect runtime statistics
   if [ -n "$SERVER_START_TIME" ] && [ -n "$CLIENT_START_TIME" ]; then
     local current_time=$(date +%s)
     local server_runtime=$((current_time - SERVER_START_TIME))
     local client_runtime=$((current_time - CLIENT_START_TIME))
-    
+
     echo "Runtime statistics:"
     echo "  Server runtime: ${server_runtime}s"
     echo "  Client runtime: ${client_runtime}s"
   fi
-  
+
   # Kill client first to ensure clean shutdown
   if [ -n "$CLIENT_PID" ]; then
     echo "Stopping client processes (PID: $CLIENT_PID)..."
     # Try to send termination signal first
     kill_process_tree "$CLIENT_PID" 15
-    
+
     # Kill any remaining Go processes related to the client
     if command -v pkill &> /dev/null; then
       echo "Looking for remaining client Go processes..."
@@ -221,26 +221,26 @@ do_cleanup() {
       pkill -f "go run.*$CLIENT_DIR" || true
     fi
   fi
-  
+
   # Stop server
   if [ -n "$SERVER_PID" ]; then
     echo "Stopping server processes (PID: $SERVER_PID)..."
     kill_process_tree "$SERVER_PID" 15
   fi
-    
+
   # Also look for any remaining processes on the port
   kill_port $PORT
-  
+
   # Wait a moment to ensure all processes are terminated
   sleep 1
-  
+
   # Use our aggressive cleanup function to ensure no stray processes
   kill_stray_go_processes
-  
+
   echo "Logs are available at:"
   echo "  Server: $SERVER_LOG"
   echo "  Client: $CLIENT_LOG"
-  
+
   echo "Cleanup complete."
 }
 
@@ -427,11 +427,11 @@ while [ "$(date +%s)" -lt "$end_time" ]; do
     client_end_time=$(date +%s)
     client_runtime=$((client_end_time - CLIENT_START_TIME))
     print_warning "Client process terminated after ${client_runtime}s"
-    
+
     # Get exit status if possible
     wait $CLIENT_PID
     client_status=$?
-    
+
     if [ $client_status -eq 0 ]; then
       print_success "Client exited normally (status: $client_status)"
       client_success=true
@@ -439,7 +439,7 @@ while [ "$(date +%s)" -lt "$end_time" ]; do
       print_error "Client exited with error (status: $client_status)"
     fi
   fi
-  
+
   # Check if server is still running
   if [ "$server_running" = true ] && ! ps -p $SERVER_PID > /dev/null 2>&1; then
     server_running=false
@@ -447,22 +447,22 @@ while [ "$(date +%s)" -lt "$end_time" ]; do
     server_runtime=$((server_end_time - SERVER_START_TIME))
     print_error "Server process terminated unexpectedly after ${server_runtime}s"
   fi
-  
+
   # Exit early if both client and server have terminated
   if [ "$client_running" = false ] && [ "$server_running" = false ]; then
     print_warning "Both client and server have terminated, ending test early"
     break
   fi
-  
+
   # Check for success indicators in logs
   if [ "$client_success" = false ] && grep -q "Session successfully established" "$CLIENT_LOG" 2>/dev/null; then
     print_success "Client established session with server"
     client_success=true
   fi
-  
+
   # Print a dot to show activity
   echo -n "."
-  
+
   # Sleep briefly
   sleep 1
 done
@@ -530,7 +530,7 @@ if [ "$client_success" = true ]; then
     echo "  Logs saved to $LOG_DIR directory"
 else
     print_error "Test failed:"
-    
+
     if ! grep -q "Connection" "$CLIENT_LOG" 2>/dev/null; then
         echo "  Client failed to connect to server"
     elif ! grep -q "Session" "$CLIENT_LOG" 2>/dev/null; then
@@ -538,7 +538,7 @@ else
     else
         echo "  Client established a session but encountered errors"
     fi
-    
+
     echo ""
     echo "  See $CLIENT_LOG and $SERVER_LOG for detailed logs"
 fi
@@ -551,4 +551,4 @@ if [ "$client_success" = true ]; then
     exit 0
 else
     exit 1
-fi 
+fi

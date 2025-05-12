@@ -13,9 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ajitpratap0/mcp-sdk-go/pkg/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ajitpratap0/mcp-sdk-go/pkg/protocol"
 )
 
 func TestNewStdioTransport(t *testing.T) {

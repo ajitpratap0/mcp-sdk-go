@@ -668,7 +668,14 @@ func (t *StreamableHTTPTransport) processEventSource(ctx context.Context, es *St
 			}
 			continue // Retry the outer loop (which will attempt to create and process a new connection)
 		}
-		*es = *newEs // Update the event source with the new one.
+		// Selectively update fields instead of copying the entire struct with mutex
+		es.URL = newEs.URL
+		es.Headers = newEs.Headers
+		es.Client = newEs.Client
+		es.Connection = newEs.Connection
+		es.LastEventID = newEs.LastEventID
+		es.StreamID = newEs.StreamID
+		// Note: we don't copy mutex (es.mu) or channels which should be preserved
 		t.logger.Printf("processEventSource: Successfully re-established event source for stream %s.", es.StreamID)
 		// Loop continues, a new esConnectionCtx will be created, and readEvents will be launched for the new 'es'
 	}

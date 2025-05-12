@@ -15,4 +15,4 @@ WORKDIR /root/
 
 COPY --from=builder /app/mcp-sdk-go .
 
-ENTRYPOINT ["./mcp-sdk-go"] 
+ENTRYPOINT ["./mcp-sdk-go"]

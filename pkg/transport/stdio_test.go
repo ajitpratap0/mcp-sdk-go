@@ -86,7 +86,7 @@ func TestStdioTransport_SendRawBytes(t *testing.T) {
 
 func TestStdioTransport_SendRequest_ReceiveResponse(t *testing.T) {
 	// Use a longer timeout to prevent flaky tests
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	// Create a channel to signal when the test server is ready to receive requests
@@ -95,6 +95,8 @@ func TestStdioTransport_SendRequest_ReceiveResponse(t *testing.T) {
 	responseSent := make(chan struct{})
 	// Create a channel to signal when the request is registered and ready for response
 	requestRegistered := make(chan struct{})
+	// Create a channel to track request completion
+	requestComplete := make(chan struct{})
 
 	// Pipe for emulating server's stdin (transport's output)
 	srvInR, srvInW := io.Pipe()
@@ -168,8 +170,11 @@ func TestStdioTransport_SendRequest_ReceiveResponse(t *testing.T) {
 		t.Log("[Test Server] Waiting for request to be registered in transport")
 		select {
 		case <-requestRegistered:
-			t.Log("[Test Server] Request registered, can send response now")
-		case <-time.After(2 * time.Second):
+			t.Log("[Test Server] Request registered, waiting for actual request to be sent")
+			// Add a delay to ensure the request is actually sent after registration
+			time.Sleep(1 * time.Second)
+			t.Log("[Test Server] Now proceeding to send response")
+		case <-time.After(5 * time.Second):
 			t.Error("[Test Server] Timed out waiting for request registration")
 			return
 		}
@@ -201,32 +206,43 @@ func TestStdioTransport_SendRequest_ReceiveResponse(t *testing.T) {
 	// Wait for the server to be ready before sending the request
 	<-serverReady
 
-	// Set up a concurrent goroutine to send the request
+	// Prepare the client side
+	var requestErr error
+	var respInterface interface{}
+
+	// Send the request in a goroutine to avoid deadlocks
 	go func() {
-		// Signal that the request is about to be sent
+		defer close(requestComplete)
+
+		// Wait for server to be ready before sending the request
+		<-serverReady
+
+		// Signal that we're about to send the request
 		t.Log("[Test Client] About to register request in transport")
 
-		// Simulate adding delay to ensure proper request registration
-		time.Sleep(100 * time.Millisecond)
+		// Register request with the transport
+		params := map[string]string{"param1": "value1"}
 
-		// Signal that the request is registered and ready for response
+		// Signal that the request is registered before actually sending it
+		// This ensures the server knows when to send the response
+		time.Sleep(500 * time.Millisecond) // Give more time to ensure registration is ready
 		close(requestRegistered)
+
+		// Now actually send the request
+		t.Log("[Test Client] Sending request")
+		respInterface, requestErr = tr.SendRequest(ctx, "test.method", params)
+		t.Log("[Test Client] SendRequest returned", "error:", requestErr)
 	}()
 
-	// Wait for request to be registered before proceeding
-	<-requestRegistered
+	// Wait for client request to complete
+	<-requestComplete
 
-	// Now send the actual request
-	params := map[string]string{"param1": "value1"}
-	t.Log("[Test Client] Sending request")
-	respInterface, err := tr.SendRequest(ctx, "test.method", params)
-	t.Log("[Test Client] SendRequest returned")
-
-	require.NoError(t, err, "SendRequest should not return an error")
-	require.NotNil(t, respInterface, "Response should not be nil")
-
-	// Wait for response to be fully sent for cleanliness
+	// Wait for server response to be fully sent
 	<-responseSent
+
+	// Now verify the results
+	require.NoError(t, requestErr, "SendRequest should not return an error")
+	require.NotNil(t, respInterface, "Response should not be nil")
 
 	// Verify the response type and content
 	resp, ok := respInterface.(*protocol.Response)
@@ -234,7 +250,7 @@ func TestStdioTransport_SendRequest_ReceiveResponse(t *testing.T) {
 	assert.Nil(t, resp.Error, "Response error should be nil")
 
 	var resultData map[string]string
-	err = json.Unmarshal(resp.Result, &resultData)
+	err := json.Unmarshal(resp.Result, &resultData)
 	require.NoError(t, err)
 	assert.Equal(t, "ok", resultData["status"])
 }

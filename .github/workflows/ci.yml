@@ -25,8 +25,11 @@ jobs:
         with:
           version: latest
 
+      - name: Download dependencies
+        run: go mod download
+
       - name: Lint
-        run: golangci-lint run ./...
+        run: golangci-lint run ./... --timeout=5m
 
   test:
     name: Test

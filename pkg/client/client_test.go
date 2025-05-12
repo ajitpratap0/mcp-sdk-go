@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -229,7 +230,12 @@ func TestClientInitializeError(t *testing.T) {
 
 	// Test error parsing initialize result
 	mt.sendRequestErr = nil
-	mt.sendRequestResponse = "invalid json"
+	// Create a protocol.Response with invalid JSON in the Result field
+	mt.sendRequestResponse = &protocol.Response{
+		JSONRPCMessage: protocol.JSONRPCMessage{JSONRPC: protocol.JSONRPCVersion},
+		ID: "test-id",
+		Result: json.RawMessage("invalid json"),
+	}
 
 	err = client.Initialize(ctx)
 	if err == nil {

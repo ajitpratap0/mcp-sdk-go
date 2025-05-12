@@ -102,14 +102,20 @@ func NewErrorResponse(id interface{}, code int, message string, data interface{}
 		}
 	}
 
+	err2 := &Error{
+		Code:    code,
+		Message: message,
+	}
+	
+	// Only set Data field if we actually have data
+	if data != nil {
+		err2.Data = dataJSON
+	}
+
 	return &Response{
 		JSONRPCMessage: JSONRPCMessage{JSONRPC: JSONRPCVersion},
 		ID:             id,
-		Error: &Error{
-			Code:    code,
-			Message: message,
-			Data:    dataJSON,
-		},
+		Error:          err2,
 	}, nil
 }
 

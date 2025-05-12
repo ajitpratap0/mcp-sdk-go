@@ -8,7 +8,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
-
+	"log"
+	
 	"github.com/ajitpratap0/mcp-sdk-go/pkg/protocol"
 )
 
@@ -58,6 +59,9 @@ type Transport interface {
 
 	// SetErrorHandler sets the handler for transport errors.
 	SetErrorHandler(handler ErrorHandler)
+
+	// Update the HandleRequest method signature
+    HandleRequest(ctx context.Context, req *protocol.Request) (*protocol.Response, error)
 }
 
 // RequestHandler handles incoming requests
@@ -92,16 +96,18 @@ func NewBaseTransport() *BaseTransport {
 
 // RegisterRequestHandler registers a handler for incoming requests
 func (t *BaseTransport) RegisterRequestHandler(method string, handler RequestHandler) {
-	t.Lock()
-	defer t.Unlock()
-	t.requestHandlers[method] = handler
+    log.Printf("Registering request handler: method=%s", method)
+    t.Lock()
+    defer t.Unlock()
+    t.requestHandlers[method] = handler
 }
 
 // RegisterNotificationHandler registers a handler for incoming notifications
 func (t *BaseTransport) RegisterNotificationHandler(method string, handler NotificationHandler) {
-	t.Lock()
-	defer t.Unlock()
-	t.notificationHandlers[method] = handler
+    log.Printf("Registering notification handler: method=%s", method)
+    t.Lock()
+    defer t.Unlock()
+    t.notificationHandlers[method] = handler
 }
 
 // GetNextID returns the next unique request ID
@@ -137,39 +143,44 @@ func (t *BaseTransport) WaitForResponse(ctx context.Context, id interface{}) (*p
 
 // HandleResponse handles an incoming response
 func (t *BaseTransport) HandleResponse(resp *protocol.Response) {
-	t.RLock()
-	ch, ok := t.pendingRequests[resp.ID]
-	t.RUnlock()
+    log.Printf("Handling response: ID=%v", resp.ID)
+    t.RLock()
+    ch, ok := t.pendingRequests[resp.ID]
+    t.RUnlock()
 
-	if ok {
-		select {
-		case ch <- resp:
-		default:
-			// Response channel is full or closed
-		}
-	}
+    if ok {
+        log.Printf("Found pending request for ID=%v, sending response", resp.ID)
+        select {
+        case ch <- resp:
+        default:
+            log.Printf("Response channel for ID=%v is full or closed", resp.ID)
+        }
+    } else {
+        log.Printf("No pending request found for ID=%v", resp.ID)
+    }
 }
 
 // HandleRequest processes an incoming request
 func (t *BaseTransport) HandleRequest(ctx context.Context, req *protocol.Request) (*protocol.Response, error) {
-	t.RLock()
-	handler, ok := t.requestHandlers[req.Method]
-	t.RUnlock()
+    log.Printf("Handling request: method=%s, ID=%v", req.Method, req.ID)
+    t.RLock()
+    handler, ok := t.requestHandlers[req.Method]
+    t.RUnlock()
 
-	if !ok {
-		return protocol.NewErrorResponse(req.ID, protocol.MethodNotFound, fmt.Sprintf("Method not found: %s", req.Method), nil)
-	}
+    if !ok {
+        log.Printf("No handler found for method=%s", req.Method)
+        return protocol.NewErrorResponse(req.ID, protocol.MethodNotFound, fmt.Sprintf("Method not found: %s", req.Method), nil)
+    }
 
-	// Params are passed through directly to the handler
-	// The handler will determine how to interpret the params
-	params := req.Params
+    log.Printf("Calling handler for method=%s", req.Method)
+    result, err := handler(ctx, req.Params)
+    if err != nil {
+        log.Printf("Handler for method=%s returned an error: %v", req.Method, err)
+        return protocol.NewErrorResponse(req.ID, protocol.InternalError, err.Error(), nil)
+    }
 
-	result, err := handler(ctx, params)
-	if err != nil {
-		return protocol.NewErrorResponse(req.ID, protocol.InternalError, err.Error(), nil)
-	}
-
-	return protocol.NewResponse(req.ID, result)
+    log.Printf("Handler for method=%s returned result: %v", req.Method, result)
+    return protocol.NewResponse(req.ID, result)
 }
 
 // HandleNotification processes an incoming notification

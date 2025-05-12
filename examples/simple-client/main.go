@@ -16,7 +16,7 @@ import (
 
 func main() {
 	// Create a context that can be canceled on interrupt
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	// Set up signal handling
@@ -30,6 +30,11 @@ func main() {
 
 	// Create a stdio transport for connecting to the server
 	t := transport.NewStdioTransport()
+
+	// Set the receive handler
+	t.SetReceiveHandler(func(data []byte) {
+		log.Printf("Client received message: %s", string(data))
+	})
 
 	// Create client with needed capabilities
 	c := client.New(t,

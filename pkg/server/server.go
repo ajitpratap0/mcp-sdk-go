@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"sync"
 	"time"
+	"log"
 
 	"github.com/ajitpratap0/mcp-sdk-go/pkg/protocol"
 	"github.com/ajitpratap0/mcp-sdk-go/pkg/transport"
@@ -48,23 +50,27 @@ type Logger interface {
 	Error(msg string, args ...interface{})
 }
 
-// DefaultLogger is a simple implementation of Logger
+// DefaultLogger is a simple implementation of the Logger interface
 type DefaultLogger struct{}
 
-func (l *DefaultLogger) Debug(msg string, args ...interface{}) {
-	fmt.Printf("[DEBUG] "+msg+"\n", args...)
-}
-
+// Info logs informational messages to stderr
 func (l *DefaultLogger) Info(msg string, args ...interface{}) {
-	fmt.Printf("[INFO] "+msg+"\n", args...)
+    fmt.Fprintf(os.Stderr, "[INFO] "+msg+"\n", args...)
 }
 
+// Debug logs debug messages to stderr
+func (l *DefaultLogger) Debug(msg string, args ...interface{}) {
+    fmt.Fprintf(os.Stderr, "[DEBUG] "+msg+"\n", args...)
+}
+
+// Warn logs warning messages to stderr
 func (l *DefaultLogger) Warn(msg string, args ...interface{}) {
-	fmt.Printf("[WARN] "+msg+"\n", args...)
+    fmt.Fprintf(os.Stderr, "[WARN] "+msg+"\n", args...)
 }
 
+// Error logs error messages to stderr
 func (l *DefaultLogger) Error(msg string, args ...interface{}) {
-	fmt.Printf("[ERROR] "+msg+"\n", args...)
+    fmt.Fprintf(os.Stderr, "[ERROR] "+msg+"\n", args...)
 }
 
 // ServerOption defines options for creating a server
@@ -188,6 +194,12 @@ func New(t transport.Transport, options ...ServerOption) *Server {
 	t.RegisterRequestHandler(protocol.MethodCancel, server.handleCancel)
 	t.RegisterRequestHandler(protocol.MethodPing, server.handlePing)
 	t.RegisterRequestHandler(protocol.MethodSetLogLevel, server.handleSetLogLevel)
+
+	// Set the receive handler
+	t.SetReceiveHandler(func(data []byte) {
+		log.Printf("Server processing received message: %s", string(data))
+		// No need to call HandleRequest here!
+	})
 
 	// Register feature handlers based on capabilities
 	if server.capabilities[string(protocol.CapabilityTools)] {
@@ -371,38 +383,48 @@ func (s *Server) isInitialized() bool {
 // Request handlers
 
 func (s *Server) handleInitialize(ctx context.Context, params interface{}) (interface{}, error) {
-	var initParams protocol.InitializeParams
-	if err := parseParams(params, &initParams); err != nil {
-		return nil, fmt.Errorf("invalid initialize params: %w", err)
-	}
+    // Log the received parameters
+    s.logger.Info("Received initialize request with params: %v", params)
 
-	s.logger.Info("Initializing connection with client: %s %s", initParams.Name, initParams.Version)
+    // Parse the parameters
+    var initParams protocol.InitializeParams
+    if err := parseParams(params, &initParams); err != nil {
+        s.logger.Error("Failed to parse initialize params: %v", err)
+        return nil, fmt.Errorf("invalid initialize params: %w", err)
+    }
 
-	s.clientInfo = initParams.ClientInfo
+    // Log the parsed parameters
+    s.logger.Info("Parsed initialize params: Name=%s, Version=%s", initParams.Name, initParams.Version)
 
-	// Store client capabilities for future reference
-	// (useful for determining if client supports sampling, etc.)
+    // Store client info
+    s.clientInfo = initParams.ClientInfo
+    s.logger.Info("Client info stored: %v", s.clientInfo)
 
-	// Mark the server as initialized
-	s.initializedLock.Lock()
-	s.initialized = true
-	s.initializedLock.Unlock()
+    // Mark the server as initialized
+    s.initializedLock.Lock()
+    s.initialized = true
+    s.initializedLock.Unlock()
+    s.logger.Info("Server marked as initialized")
 
-	result := &protocol.InitializeResult{
-		ProtocolVersion: protocol.ProtocolRevision,
-		Name:            s.name,
-		Version:         s.version,
-		Capabilities:    s.capabilities,
-		ServerInfo: &protocol.ServerInfo{
-			Name:        s.name,
-			Version:     s.version,
-			Description: s.description,
-			Homepage:    s.homepage,
-		},
-		FeatureOptions: s.featureOptions,
-	}
+    // Prepare the response
+    result := &protocol.InitializeResult{
+        ProtocolVersion: protocol.ProtocolRevision,
+        Name:            s.name,
+        Version:         s.version,
+        Capabilities:    s.capabilities,
+        ServerInfo: &protocol.ServerInfo{
+            Name:        s.name,
+            Version:     s.version,
+            Description: s.description,
+            Homepage:    s.homepage,
+        },
+        FeatureOptions: s.featureOptions,
+    }
 
-	return result, nil
+    // Log the response being sent
+    s.logger.Info("Sending initialize response: %v", result)
+
+    return result, nil
 }
 
 func (s *Server) handleInitialized(ctx context.Context, params interface{}) error {

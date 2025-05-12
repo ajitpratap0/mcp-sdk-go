@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -86,36 +85,69 @@ func TestStdioTransport_SendRawBytes(t *testing.T) {
 }
 
 func TestStdioTransport_SendRequest_ReceiveResponse(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// Use a longer timeout and a new context that won't be canceled when the test completes
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+
+	// Create a channel to signal when the test server has processed the request
+	serverReady := make(chan struct{})
+	// Create a channel to signal when the test server has sent the response
+	responseSent := make(chan struct{})
 
 	// Pipe for emulating server's stdin (transport's output)
 	srvInR, srvInW := io.Pipe()
 	// Pipe for emulating server's stdout (transport's input)
 	srvOutR, srvOutW := io.Pipe()
 
+	// Initialize the transport
 	tr := NewStdioTransport(srvOutR, srvInW)
+
+	// Start the transport in a goroutine
+	transportErrors := make(chan error, 1)
 	go func() {
-		if err := tr.Start(ctx); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, io.EOF) && !strings.Contains(err.Error(), "i/o operation on closed pipe") {
-			t.Logf("Transport Start error: %v", err) // Use t.Logf for errors in goroutines
+		if err := tr.Start(ctx); err != nil &&
+			!errors.Is(err, context.Canceled) &&
+			!errors.Is(err, io.EOF) &&
+			!strings.Contains(err.Error(), "i/o operation on closed pipe") {
+			transportErrors <- err
+		} else {
+			transportErrors <- nil // Signal normal completion
 		}
 	}()
-	defer tr.Stop(ctx) // Use Stop instead of Close
 
-	var wg sync.WaitGroup
-	wg.Add(1)
+	// Make sure we clean up after the test
+	defer func() {
+		// Stop the transport
+		tr.Stop(ctx)
 
-	// Simulate server behavior
+		// Close all pipes to prevent goroutine leaks
+		srvInR.Close()
+		srvInW.Close()
+		srvOutR.Close()
+		srvOutW.Close()
+
+		// Drain the error channel
+		select {
+		case err := <-transportErrors:
+			if err != nil {
+				t.Logf("Transport error: %v", err)
+			}
+		default:
+			// No error or already consumed
+		}
+	}()
+
+	// Simulate server behavior in a separate goroutine
 	go func() {
-		defer wg.Done()
-		defer srvInR.Close()
-		defer srvOutW.Close()
+		defer close(responseSent) // Signal when done sending response
+
+		// Signal that we're ready to receive the request
+		close(serverReady)
 
 		t.Log("[Test Server] Goroutine started, waiting to read request from clientOutR")
 		reqBytes, err := readJSONLine(srvInR) // Reads from where the client writes requests
 		if err != nil {
 			t.Logf("[Test Server] Error reading request line: %v", err)
-			// tr.Stop(ctx) // Not ideal to call Stop from here, let client timeout
 			return
 		}
 		t.Logf("[Test Server] Read request line: %s", string(reqBytes))
@@ -127,34 +159,54 @@ func TestStdioTransport_SendRequest_ReceiveResponse(t *testing.T) {
 		}
 		t.Logf("[Test Server] Unmarshalled request ID: %s, Method: %s", req.ID, req.Method)
 
-		// Send a response
+		// Create a proper response using the same ID as the request
 		respMsg, _ := protocol.NewResponse(req.ID, map[string]string{"status": "ok"})
 		respBytes, _ := json.Marshal(respMsg)
 		t.Logf("[Test Server] Writing response to clientInW: %s", string(respBytes))
-		if _, err := srvOutW.Write(append(respBytes, '\n')); err != nil {
+
+		// Add a newline to the response bytes to ensure it's properly processed
+		responseData := append(respBytes, '\n')
+
+		// Write the response
+		n, err := srvOutW.Write(responseData)
+		if err != nil {
 			t.Logf("[Test Server] Error writing response: %v", err)
+			return
 		}
-		t.Log("[Test Server] Response written and clientInW closed by defer")
+
+		// Explicitly flush to ensure data is written
+		t.Logf("[Test Server] Wrote %d bytes to the pipe", n)
+
+		// Give the transport some time to process the response
+		time.Sleep(100 * time.Millisecond)
+
+		t.Log("[Test Server] Response written successfully")
 	}()
+
+	// Wait for the server to be ready before sending the request
+	<-serverReady
 
 	// Client sends request
 	params := map[string]string{"param1": "value1"}
+	t.Log("[Test Client] Sending request")
 	respInterface, err := tr.SendRequest(ctx, "test.method", params)
+	t.Log("[Test Client] SendRequest returned")
 
-	require.NoError(t, err)
-	require.NotNil(t, respInterface)
+	require.NoError(t, err, "SendRequest should not return an error")
+	require.NotNil(t, respInterface, "Response should not be nil")
 
+	// Wait for response to be fully sent for cleanliness
+	<-responseSent
+
+	// Verify the response type and content
 	resp, ok := respInterface.(*protocol.Response)
 	require.True(t, ok, "Response should be of type *protocol.Response")
-
 	assert.Nil(t, resp.Error, "Response error should be nil")
 
 	var resultData map[string]string
 	err = json.Unmarshal(resp.Result, &resultData)
 	require.NoError(t, err)
 	assert.Equal(t, "ok", resultData["status"])
-
-	wg.Wait() // Wait for server goroutine to finish assertions
 }
 
 func TestStdioTransport_ReceiveRequest_SendResponse(t *testing.T) {

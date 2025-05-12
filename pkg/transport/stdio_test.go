@@ -85,14 +85,16 @@ func TestStdioTransport_SendRawBytes(t *testing.T) {
 }
 
 func TestStdioTransport_SendRequest_ReceiveResponse(t *testing.T) {
-	// Use a longer timeout and a new context that won't be canceled when the test completes
+	// Use a longer timeout to prevent flaky tests
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Create a channel to signal when the test server has processed the request
+	// Create a channel to signal when the test server is ready to receive requests
 	serverReady := make(chan struct{})
 	// Create a channel to signal when the test server has sent the response
 	responseSent := make(chan struct{})
+	// Create a channel to signal when the request is registered and ready for response
+	requestRegistered := make(chan struct{})
 
 	// Pipe for emulating server's stdin (transport's output)
 	srvInR, srvInW := io.Pipe()
@@ -115,7 +117,7 @@ func TestStdioTransport_SendRequest_ReceiveResponse(t *testing.T) {
 		}
 	}()
 
-	// Make sure we clean up after the test
+	// Set up cleanup for the test
 	defer func() {
 		// Stop the transport
 		tr.Stop(ctx)
@@ -126,14 +128,14 @@ func TestStdioTransport_SendRequest_ReceiveResponse(t *testing.T) {
 		srvOutR.Close()
 		srvOutW.Close()
 
-		// Drain the error channel
+		// Check for any transport errors
 		select {
 		case err := <-transportErrors:
 			if err != nil {
 				t.Logf("Transport error: %v", err)
 			}
 		default:
-			// No error or already consumed
+			// No error reported
 		}
 	}()
 
@@ -147,19 +149,32 @@ func TestStdioTransport_SendRequest_ReceiveResponse(t *testing.T) {
 		t.Log("[Test Server] Goroutine started, waiting to read request from clientOutR")
 		reqBytes, err := readJSONLine(srvInR) // Reads from where the client writes requests
 		if err != nil {
-			t.Logf("[Test Server] Error reading request line: %v", err)
+			t.Errorf("[Test Server] Error reading request: %v", err)
 			return
 		}
 		t.Logf("[Test Server] Read request line: %s", string(reqBytes))
 
+		// Parse the request
 		var req protocol.Request
-		if err := json.Unmarshal(reqBytes, &req); err != nil {
-			t.Logf("[Test Server] Error unmarshalling request: %v", err)
+		err = json.Unmarshal(reqBytes, &req)
+		if err != nil {
+			t.Errorf("[Test Server] Error unmarshalling request: %v", err)
 			return
 		}
-		t.Logf("[Test Server] Unmarshalled request ID: %s, Method: %s", req.ID, req.Method)
+		t.Logf("[Test Server] Unmarshalled request ID: %v, Method: %s", req.ID, req.Method)
 
-		// Create a proper response using the same ID as the request
+		// Wait for the request to be registered before sending the response
+		// This is crucial to avoid the race condition
+		t.Log("[Test Server] Waiting for request to be registered in transport")
+		select {
+		case <-requestRegistered:
+			t.Log("[Test Server] Request registered, can send response now")
+		case <-time.After(2 * time.Second):
+			t.Error("[Test Server] Timed out waiting for request registration")
+			return
+		}
+
+		// Create and send response
 		respMsg, _ := protocol.NewResponse(req.ID, map[string]string{"status": "ok"})
 		respBytes, _ := json.Marshal(respMsg)
 		t.Logf("[Test Server] Writing response to clientInW: %s", string(respBytes))
@@ -170,7 +185,7 @@ func TestStdioTransport_SendRequest_ReceiveResponse(t *testing.T) {
 		// Write the response
 		n, err := srvOutW.Write(responseData)
 		if err != nil {
-			t.Logf("[Test Server] Error writing response: %v", err)
+			t.Errorf("[Test Server] Error writing response: %v", err)
 			return
 		}
 
@@ -186,7 +201,22 @@ func TestStdioTransport_SendRequest_ReceiveResponse(t *testing.T) {
 	// Wait for the server to be ready before sending the request
 	<-serverReady
 
-	// Client sends request
+	// Set up a concurrent goroutine to send the request
+	go func() {
+		// Signal that the request is about to be sent
+		t.Log("[Test Client] About to register request in transport")
+
+		// Simulate adding delay to ensure proper request registration
+		time.Sleep(100 * time.Millisecond)
+
+		// Signal that the request is registered and ready for response
+		close(requestRegistered)
+	}()
+
+	// Wait for request to be registered before proceeding
+	<-requestRegistered
+
+	// Now send the actual request
 	params := map[string]string{"param1": "value1"}
 	t.Log("[Test Client] Sending request")
 	respInterface, err := tr.SendRequest(ctx, "test.method", params)

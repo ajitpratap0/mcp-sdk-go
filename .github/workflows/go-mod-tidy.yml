@@ -28,7 +28,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: '1.24.2'
+          go-version: '1.24.2'  # Match go.mod version
           cache: true
 
       - name: Run go mod tidy
@@ -41,4 +41,4 @@ jobs:
             git commit -m "chore: go mod tidy"
             git push
           fi
-        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') 
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')

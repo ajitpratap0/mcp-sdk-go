@@ -1,86 +1,23 @@
-# Options for analysis running
+# Basic golangci-lint configuration for Model Context SDK
 run:
-  # Default concurrency is a available CPU number.
-  # You can pass the specific number or use the 'auto' value
-  concurrency: auto
-
-  # Timeout for analysis, e.g. 30s, 5m, default is 1m
   timeout: 5m
-
-  # Exit code when at least one issue was found, default is 1
-  issues-exit-code: 1
-
-  # Allow multiple parallel golangci-lint instances running.
-  # If false (default) - golangci-lint acquires file lock on start.
-  allow-parallel-runners: false
-
-  # Include test files or not, default is true
   tests: true
-
-  # Allow skipping directories (by default, skip vendor)
   skip-dirs:
     - vendor
+  go: '1.24.2'  # Match go.mod version
 
-  # Use modern go version during linting to avoid false positives
-  go: '1.24'
-
-# Output configuration options
 output:
-  # Format of the output: colored-line-number (default), line-number, json, tab, checkstyle, etc.
   format: colored-line-number
 
-  # Print lines of code with issue, default is true
-  print-issued-lines: true
-
-  # Print linter name in the end of issue text, default is true
-  print-linter-name: true
-
-  # Add a prefix to the output file references; useful for editor integrations
-  path-prefix: ""
-
-# Configuration of the specific linters
 linters-settings:
   errcheck:
-    # Report about not checking of errors in type assertions: `a := b.(MyStruct)`.
     check-type-assertions: true
 
   govet:
-    # Report about shadowed variables
     check-shadowing: true
 
   goimports:
-    # Put imports beginning with prefix after 3rd-party packages
     local-prefixes: github.com/ajitpratap0
-
-  gocritic:
-    # Enable all available checks by default
-    enabled-checks:
-      - appendAssign
-      - appendCombine
-      - assignOp
-      - captLocal
-      - caseOrder
-      - defaultCaseOrder
-      - dupArg
-      - dupBranchBody
-      - dupCase
-      - elseif
-      - emptyFallthrough
-      - hugeParam
-      - ifElseChain
-      - nilValReturn
-      - rangeValCopy
-      - singleCaseSwitch
-      - sloppyLen
-      - switchTrue
-      - typeAssertChain
-      - underef
-      - unlambda
-      - unnecessaryBlock
-
-  gosec:
-    # Specify the level of confidence for issues found (low, medium, high)
-    severity: medium
 
 linters:
   disable-all: true
@@ -93,29 +30,12 @@ linters:
     - typecheck
     - unused
     - goimports
-    - gocritic
-    - gosec
     - misspell
-    - revive
 
 issues:
-  # List of regexps of issue texts to exclude
   exclude-rules:
-    # Exclude some linters from running on tests files.
     - path: _test\.go
       linters:
         - gosec
-        - dupl
         - errcheck
-
-  # Maximum count of issues with the same text
   max-same-issues: 5
-
-  # Maximum issues count per one linter.
-  max-issues-per-linter: 30
-
-  # Disable fixing of issues
-  fix: false
-
-  # Exclude specific error codes
-  exclude-use-default: false

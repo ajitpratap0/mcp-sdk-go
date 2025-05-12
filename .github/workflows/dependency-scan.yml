@@ -19,7 +19,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: '1.24.2'
+          go-version: '1.24.2'  # Match go.mod version
           cache: true
 
       - name: Run Gosec Security Scanner
@@ -37,7 +37,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: '1.24.2'
+          go-version: '1.24.2'  # Match go.mod version
           cache: true
 
       - name: Install govulncheck
@@ -55,4 +55,4 @@ jobs:
         uses: actions/checkout@v3
 
       - name: Dependency Review
-        uses: actions/dependency-review-action@v3 
+        uses: actions/dependency-review-action@v3

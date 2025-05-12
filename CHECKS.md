@@ -7,6 +7,7 @@ This document describes the local commit checks that can be run before pushing c
 A pre-commit hook has been set up to run the same checks as the GitHub workflows. This will prevent commits that would fail the CI checks.
 
 The pre-commit hook will run:
+
 1. `go mod tidy` check
 2. Code formatting verification with `gofmt`
 3. Linting with `golangci-lint`

@@ -1,4 +1,5 @@
-FROM golang:1.24-bullseye
+# Use Go version from go.mod (1.24.2)
+FROM golang:1.24.2-bullseye
 
 # Avoid warnings by switching to noninteractive
 ENV DEBIAN_FRONTEND=noninteractive

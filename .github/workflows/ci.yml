@@ -60,6 +60,17 @@ jobs:
           go-version: ${{ matrix.go-version }}
           cache: true
 
+      # Special handling for test dependencies
+      - name: Setup test dependencies
+        run: |
+          go mod tidy
+          # Download test dependencies specifically
+          go get -t ./...
+          # Ensure testify is explicitly downloaded with version
+          go get github.com/stretchr/testify@v1.8.4
+          # Update go.sum entries for test packages
+          go mod tidy
+
       - name: Run tests
         run: go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
 

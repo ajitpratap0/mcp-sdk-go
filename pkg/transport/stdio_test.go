@@ -304,18 +304,24 @@ func TestStdioTransport_ProcessMessage_MalformedJSON(t *testing.T) {
 
 	tr := NewStdioTransport(cltInR, cltOutW)
 
-	var errorHandlerCalled bool
-	var receivedError error
+	// Use a buffered channel to communicate errors between goroutines in a thread-safe way
+	errorChan := make(chan error, 1)
 	tr.SetErrorHandler(func(err error) {
-		errorHandlerCalled = true
-		receivedError = err
+		// Send the error to the channel in a non-blocking way
+		select {
+		case errorChan <- err:
+			// Error sent successfully
+		default:
+			// Channel buffer is full, which shouldn't happen in this test
+			// but let's handle it gracefully
+			t.Logf("Warning: Error channel buffer full when sending: %v", err)
+		}
 	})
 
 	go func() {
-		if err := tr.Start(ctx); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, io.EOF) && !strings.Contains(err.Error(), "i/o operation on closed pipe") && !strings.Contains(err.Error(), "unexpected EOF"){
-				if !errorHandlerCalled { // Only log if error handler wasn't called, suggesting a different issue
-					t.Logf("Transport Start error: %v", err)
-				}
+		if err := tr.Start(ctx); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, io.EOF) && !strings.Contains(err.Error(), "i/o operation on closed pipe") && !strings.Contains(err.Error(), "unexpected EOF") {
+			// Simply log the error - we don't need to check errorHandlerCalled since we're using channels now
+			t.Logf("Transport Start error: %v", err)
 		}
 	}()
 	defer tr.Stop(ctx) // Use Stop instead of Close
@@ -326,8 +332,16 @@ func TestStdioTransport_ProcessMessage_MalformedJSON(t *testing.T) {
 	cltInW.Close() // Close input pipe
 	require.NoError(t, err)
 
-	// Wait for potential error handling
-	time.Sleep(100 * time.Millisecond) 
+	// Wait for error with timeout
+	var receivedError error
+	var errorHandlerCalled bool
+
+	select {
+	case receivedError = <-errorChan:
+		errorHandlerCalled = true
+	case <-time.After(1 * time.Second):
+		errorHandlerCalled = false
+	}
 
 	assert.True(t, errorHandlerCalled, "Error handler should have been called for malformed JSON")
 	assert.NotNil(t, receivedError, "Received error should not be nil")

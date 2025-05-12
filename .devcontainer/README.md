@@ -1,5 +1,8 @@
 # Development Container for Model Context SDK
 
+[![Go Version](https://img.shields.io/badge/Go-1.24-blue)](https://golang.org/)
+[![Dev Container Spec](https://img.shields.io/badge/Dev%20Container-Enabled-blue)](https://containers.dev/)
+
 This directory contains configuration for a development container that provides a consistent environment for working with the Model Context SDK. The Dev Container includes all necessary tools and dependencies required for development, testing, and running the local commit checks.
 
 ## Features
@@ -32,11 +35,13 @@ VS Code will build the container and configure the development environment autom
 For other IDEs that support the Dev Container specification or for command-line usage:
 
 1. Build and start the container:
+
    ```bash
    docker-compose -f .devcontainer/docker-compose.yml up -d
    ```
 
 2. Attach to the running container:
+
    ```bash
    docker exec -it $(docker ps -q --filter "name=model-context-sdk_app") bash
    ```

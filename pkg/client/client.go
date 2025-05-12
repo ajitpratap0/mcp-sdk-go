@@ -236,7 +236,7 @@ func (c *ClientConfig) Initialize(ctx context.Context) error {
 	if initialized {
 		return nil
 	}
-	
+
 	// Initialize the transport
 	if err := c.transport.Initialize(ctx); err != nil {
 		return fmt.Errorf("transport initialization failed: %w", err)

@@ -34,8 +34,7 @@ dist/
 go.work
 
 # IDE specific files
-.idea/
-.vscode/
+# .idea/ and .vscode/ are now tracked for consistent development environment
 *.swp
 *.swo
 *~

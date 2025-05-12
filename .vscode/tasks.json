@@ -1,0 +1,70 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Check All",
+            "type": "shell",
+            "command": "make check",
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Run Tests",
+            "type": "shell",
+            "command": "make test",
+            "group": "test",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Lint Code",
+            "type": "shell",
+            "command": "make lint",
+            "problemMatcher": {
+                "owner": "go",
+                "fileLocation": ["relative", "${workspaceFolder}"],
+                "pattern": {
+                    "regexp": "^(.+):(\\d+):(\\d+):\\s+(.+)$",
+                    "file": 1,
+                    "line": 2,
+                    "column": 3,
+                    "message": 4
+                }
+            }
+        },
+        {
+            "label": "Format Code",
+            "type": "shell",
+            "command": "make format",
+            "problemMatcher": []
+        },
+        {
+            "label": "Check Dependencies",
+            "type": "shell",
+            "command": "make tidy",
+            "problemMatcher": []
+        },
+        {
+            "label": "Security Scan",
+            "type": "shell",
+            "command": "make security",
+            "problemMatcher": []
+        },
+        {
+            "label": "Vulnerability Check",
+            "type": "shell",
+            "command": "make vulncheck",
+            "problemMatcher": []
+        }
+    ]
+}

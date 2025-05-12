@@ -1,8 +1,8 @@
 package protocol
 
 import (
-	"time"
 	"fmt"
+	"time"
 )
 
 const (
@@ -196,11 +196,11 @@ type SetLogLevelResult struct {
 
 // LogParams defines parameters for the log notification
 type LogParams struct {
-	Level   LogLevel        `json:"level"`
-	Message string          `json:"message"`
-	Source  string          `json:"source,omitempty"`
-	Time    time.Time       `json:"time,omitempty"`
-	Data    interface{}     `json:"data,omitempty"`
+	Level   LogLevel    `json:"level"`
+	Message string      `json:"message"`
+	Source  string      `json:"source,omitempty"`
+	Time    time.Time   `json:"time,omitempty"`
+	Data    interface{} `json:"data,omitempty"`
 }
 
 // ErrorObject defines the structure for a JSON-RPC error.

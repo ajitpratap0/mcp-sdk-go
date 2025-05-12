@@ -1,0 +1,32 @@
+{
+    "go.useLanguageServer": true,
+    "go.lintTool": "golangci-lint",
+    "go.lintFlags": ["--fast"],
+    "go.formatTool": "gofmt",
+    "go.testFlags": ["-v", "-race"],
+    "go.coverageDecorator": {
+        "type": "highlight",
+        "coveredHighlightColor": "rgba(64,128,128,0.5)",
+        "uncoveredHighlightColor": "rgba(128,64,64,0.25)"
+    },
+    "go.toolsManagement.autoUpdate": true,
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+        "source.organizeImports": true
+    },
+    "gopls": {
+        "ui.completion.usePlaceholders": true,
+        "ui.diagnostic.analyses": {
+            "unusedparams": true,
+            "shadow": true
+        },
+        "ui.documentation.hoverKind": "structured"
+    },
+    "[go]": {
+        "editor.insertSpaces": false,
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "golang.go"
+    },
+    "files.eol": "\n",
+    "files.trimTrailingWhitespace": true
+}

@@ -353,12 +353,12 @@ func TestError_ErrorMethod(t *testing.T) {
 		expected string
 	}{
 		{
-			name: "Typical error",
+			name:     "Typical error",
 			err:      &Error{Code: InvalidRequest, Message: "Invalid Request"},
 			expected: fmt.Sprintf("jsonrpc: code %d, message: Invalid Request", InvalidRequest),
 		},
 		{
-			name: "Error with data",
+			name:     "Error with data",
 			err:      &Error{Code: InternalError, Message: "Internal Error", Data: "some data"},
 			expected: fmt.Sprintf("jsonrpc: code %d, message: Internal Error", InternalError),
 		},

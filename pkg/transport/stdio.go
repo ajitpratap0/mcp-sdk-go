@@ -18,14 +18,14 @@ import (
 // This is the recommended transport mechanism in the MCP specification for command-line
 // tools and applications where the client and server are typically connected via pipes.
 type StdioTransport struct {
-	*BaseTransport      // Embedded BaseTransport
-	reader         io.Reader      // Changed from *bufio.Reader for flexibility
-	writer         io.Writer      // Changed from *bufio.Writer for flexibility
-	rawWriter      *bufio.Writer  // Internal buffered writer
-	errorHandler   ErrorHandler   // For low-level I/O errors
-	mutex          sync.RWMutex   // Protects writer and errorHandler
+	*BaseTransport               // Embedded BaseTransport
+	reader         io.Reader     // Changed from *bufio.Reader for flexibility
+	writer         io.Writer     // Changed from *bufio.Writer for flexibility
+	rawWriter      *bufio.Writer // Internal buffered writer
+	errorHandler   ErrorHandler  // For low-level I/O errors
+	mutex          sync.RWMutex  // Protects writer and errorHandler
 	done           chan struct{}
-	stopOnce       sync.Once      // Ensures Stop logic runs once
+	stopOnce       sync.Once // Ensures Stop logic runs once
 }
 
 // NewStdioTransport creates a new transport that uses the provided reader and writer.
@@ -163,8 +163,8 @@ func (t *StdioTransport) processMessage(data []byte) {
 	// Notification hasMethod and (usually) no ID, or if ID is present, no result/error.
 	isResponse := hasID && (genericMsg["result"] != nil || genericMsg["error"] != nil)
 	isRequest := hasID && hasMethod && !isResponse // Ensure it's not also a response structure
-	isNotification := hasMethod && !hasID // Simplest notification form
-	
+	isNotification := hasMethod && !hasID          // Simplest notification form
+
 	t.BaseTransport.Logf("StdioTransport.processMessage: Parsed generic: hasMethod=%t, hasID=%t, isResponse=%t, isRequest=%t, isNotification=%t", hasMethod, hasID, isResponse, isRequest, isNotification)
 
 	// More robust check for notifications that might include an ID (though atypical for JSON-RPC notifs)

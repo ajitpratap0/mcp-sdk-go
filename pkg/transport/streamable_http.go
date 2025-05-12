@@ -65,13 +65,13 @@ func NewStreamableHTTPTransport(endpoint string, options ...Option) *StreamableH
 	}
 
 	return &StreamableHTTPTransport{
-		BaseTransport:   NewBaseTransport(),
-		endpoint:        endpoint,
-		client:          client,
-		options:         opts,
-		headers:         make(map[string]string),
-		requestIDPrefix: "streamable-http",
-		pendingRequests: make(map[string]chan *protocol.Response),
+		BaseTransport:    NewBaseTransport(),
+		endpoint:         endpoint,
+		client:           client,
+		options:          opts,
+		headers:          make(map[string]string),
+		requestIDPrefix:  "streamable-http",
+		pendingRequests:  make(map[string]chan *protocol.Response),
 		progressHandlers: make(map[string]ProgressHandler),
 		responseHandlers: make(map[string]func(*protocol.Response)),
 		logger:           log.New(os.Stdout, "StreamableHTTPTransport: ", log.LstdFlags),
@@ -282,7 +282,7 @@ func (t *StreamableHTTPTransport) SendRequest(ctx context.Context, method string
 
 	// Wait for the response, or for the original context or a specific wait timeout to be done.
 	waitCtx, waitCancel := context.WithTimeout(ctx, t.options.RequestTimeout) // waitCtx inherits cancellation from ctx
-	defer waitCancel()                                                       // Cleans up the timer for waitCtx
+	defer waitCancel()                                                        // Cleans up the timer for waitCtx
 
 	select {
 	case resp := <-responseChan:
@@ -317,8 +317,7 @@ func (t *StreamableHTTPTransport) SendRequest(ctx context.Context, method string
 		}
 
 		// Clean up any dedicated SSE stream for this request
-		if esVal, loaded := t.eventSources.LoadAndDelete(requestStreamID);
-		loaded {
+		if esVal, loaded := t.eventSources.LoadAndDelete(requestStreamID); loaded {
 			if es, ok := esVal.(*StreamableEventSource); ok {
 				t.logger.Printf("[DEBUG] SendRequest: closing event source %s due to context cancellation/timeout\n", requestStreamID)
 				es.Close() // This will also ensure its goroutines (readEvents, processEventSource) terminate
@@ -482,25 +481,25 @@ func (t *StreamableHTTPTransport) sendHTTPRequest(ctx context.Context, message i
 			es := &StreamableEventSource{
 				URL:         t.endpoint, // For potential future reconnections, though this ES is tied to this specific resp
 				Headers:     t.headers,  // Headers for potential reconnections
-				Client:      t.client,     // Client for potential reconnections
-				Connection:  resp,         // The live http.Response with the SSE stream
+				Client:      t.client,   // Client for potential reconnections
+				Connection:  resp,       // The live http.Response with the SSE stream
 				MessageChan: make(chan []byte, 100),
 				ErrorChan:   make(chan error, 10),
 				CloseChan:   make(chan struct{}),
 				StreamID:    streamID,
 				LastEventID: lastEventID,
 			}
-			es.isConnected.Store(true) // Mark as connected since we have the live response
+			es.isConnected.Store(true)         // Mark as connected since we have the live response
 			t.eventSources.Store(streamID, es) // Store it so SendRequest can find it
-			
+
 			// Start reading events from this stream using the response body directly.
 			// This goroutine is tied to the lifecycle of the original request's context (ctx).
-			go es.readEvents(ctx) // readEvents will handle closing resp.Body when done or on error
+			go es.readEvents(ctx)     // readEvents will handle closing resp.Body when done or on error
 			sseStreamHandedOff = true // The resp.Body is now managed by es.readEvents
 
 			// Start processing messages from this new event source.
 			// This goroutine is also tied to the lifecycle of the original request's context (ctx).
-			go t.processEventSource(ctx, es) 
+			go t.processEventSource(ctx, es)
 			t.logger.Printf("[DEBUG] Handed off POST response's SSE stream to new EventSource for streamID: %s\n", streamID)
 		} else {
 			// This is an SSE stream not directly tied to a SendRequest call (e.g., from SendBatch or other internal POSTs)
@@ -589,7 +588,7 @@ func (t *StreamableHTTPTransport) processEventSource(ctx context.Context, es *St
 			case <-ctx.Done(): // Parent context cancelled
 				t.logger.Printf("processEventSource: Parent context done during message processing for stream %s: %v", es.StreamID, ctx.Err())
 				esConnectionCancel() // Signal the event reading goroutine to stop
-				return             // Exit processEventSource
+				return               // Exit processEventSource
 
 			case <-esConnectionCtx.Done(): // Current connection attempt's context cancelled (e.g. readEvents finished or error)
 				t.logger.Printf("processEventSource: Connection context done for stream %s: %v. Will attempt reconnect if appropriate.", es.StreamID, esConnectionCtx.Err())
@@ -598,7 +597,7 @@ func (t *StreamableHTTPTransport) processEventSource(ctx context.Context, es *St
 			case msg, ok := <-es.MessageChan:
 				if !ok {
 					t.logger.Printf("processEventSource: MessageChan closed for stream %s. Connection likely lost.", es.StreamID)
-					esConnectionCancel()         // Ensure event reading goroutine is stopped
+					esConnectionCancel()             // Ensure event reading goroutine is stopped
 					keepProcessingThisSource = false // Break inner loop to retry connection
 					continue
 				}
@@ -611,12 +610,12 @@ func (t *StreamableHTTPTransport) processEventSource(ctx context.Context, es *St
 			case err, ok := <-es.ErrorChan:
 				if !ok {
 					t.logger.Printf("processEventSource: ErrorChan closed for stream %s.", es.StreamID)
-					esConnectionCancel()         // Ensure event reading goroutine is stopped
+					esConnectionCancel()             // Ensure event reading goroutine is stopped
 					keepProcessingThisSource = false // Break inner loop to retry connection
 					continue
 				}
 				t.logger.Printf("processEventSource: Received error on stream %s: %v. Will attempt reconnect.", es.StreamID, err)
-				esConnectionCancel()         // Ensure event reading goroutine is stopped
+				esConnectionCancel()             // Ensure event reading goroutine is stopped
 				keepProcessingThisSource = false // Break inner loop to retry connection
 			}
 		}
@@ -625,7 +624,6 @@ func (t *StreamableHTTPTransport) processEventSource(ctx context.Context, es *St
 		t.logger.Printf("processEventSource: Waiting for active event reader to finish before potential retry for stream %s...", es.StreamID)
 		eventReadingWG.Wait()
 		t.logger.Printf("processEventSource: Active event reader finished for stream %s.", es.StreamID)
-
 
 		// If the parent context is done, don't attempt to reconnect.
 		if ctx.Err() != nil {

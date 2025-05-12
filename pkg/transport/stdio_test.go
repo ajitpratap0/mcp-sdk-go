@@ -41,7 +41,7 @@ func TestStdioTransport_SendRawBytes(t *testing.T) {
 	testData := []byte("hello world")
 	buf := make([]byte, len(testData)+1) // +1 for newline
 	expectedData := append(testData, '\n')
-	readDone := make(chan error, 1)        // Channel to signal read completion and pass error
+	readDone := make(chan error, 1) // Channel to signal read completion and pass error
 	var nRead int
 
 	t.Log("TestStdioTransport_SendRawBytes: Starting reader goroutine")
@@ -142,7 +142,7 @@ func TestStdioTransport_SendRequest_ReceiveResponse(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotNil(t, respInterface)
-	
+
 	resp, ok := respInterface.(*protocol.Response)
 	require.True(t, ok, "Response should be of type *protocol.Response")
 
@@ -270,7 +270,7 @@ func TestStdioTransport_ReceiveNotification(t *testing.T) {
 			t.Logf("Transport Start error: %v", err)
 		}
 	}()
-	defer tr.Stop(ctx)      // Use Stop instead of Close
+	defer tr.Stop(ctx)    // Use Stop instead of Close
 	defer cltOutW.Close() // Close writer part of output pipe
 
 	// Simulate client sending a notification
@@ -284,7 +284,7 @@ func TestStdioTransport_ReceiveNotification(t *testing.T) {
 
 	// Give transport time to process notification
 	// In a real scenario, might need a channel to signal completion from handler
-	time.Sleep(100 * time.Millisecond) 
+	time.Sleep(100 * time.Millisecond)
 
 	select {
 	case params := <-notificationReceived:
@@ -299,8 +299,8 @@ func TestStdioTransport_ProcessMessage_MalformedJSON(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	cltInR, cltInW := io.Pipe()   // Transport's input
-	_, cltOutW := io.Pipe() // Transport's output (not used for response here)
+	cltInR, cltInW := io.Pipe() // Transport's input
+	_, cltOutW := io.Pipe()     // Transport's output (not used for response here)
 
 	tr := NewStdioTransport(cltInR, cltOutW)
 
@@ -371,8 +371,8 @@ func TestStdioTransport_SendNotification_NoHandler(t *testing.T) {
 	})
 
 	go func() {
-		if err := tr.Start(ctx); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, io.EOF) && !strings.Contains(err.Error(), "i/o operation on closed pipe") && !strings.Contains(err.Error(), "unexpected EOF"){
-				t.Logf("Transport Start error: %v", err)
+		if err := tr.Start(ctx); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, io.EOF) && !strings.Contains(err.Error(), "i/o operation on closed pipe") && !strings.Contains(err.Error(), "unexpected EOF") {
+			t.Logf("Transport Start error: %v", err)
 		}
 	}()
 	defer tr.Stop(ctx) // Use Stop instead of Close
@@ -397,7 +397,7 @@ func TestStdioTransport_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	cltInR, cltInPipeW := io.Pipe() // Transport's input, reader will block indefinitely
-	_, cltOutW := io.Pipe() // Transport's output
+	_, cltOutW := io.Pipe()         // Transport's output
 
 	tr := NewStdioTransport(cltInR, cltOutW)
 

@@ -106,7 +106,7 @@ func NewErrorResponse(id interface{}, code int, message string, data interface{}
 		Code:    code,
 		Message: message,
 	}
-	
+
 	// Only set Data field if we actually have data
 	if data != nil {
 		err2.Data = dataJSON

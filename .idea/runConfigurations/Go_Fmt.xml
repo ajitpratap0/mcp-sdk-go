@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="Go Fmt" type="GoToolTask" factoryName="Go Tool">
+    <module name="model-context-sdk" />
+    <working_directory value="$PROJECT_DIR$" />
+    <parameters value="fmt ./..." />
+    <kind value="RUN" />
+    <package value="fmt" />
+    <directory value="$PROJECT_DIR$" />
+    <filePath value="$PROJECT_DIR$" />
+    <method v="2" />
+  </configuration>
+</component>

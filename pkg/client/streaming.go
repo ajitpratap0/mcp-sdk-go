@@ -179,6 +179,22 @@ func nextRequestID() int64 {
 
 // Helper function to register a progress handler
 func (c *ClientConfig) registerProgressHandler(requestID string, handler func(json.RawMessage)) {
-	// In a real implementation, this would register the handler with the transport
-	// For now, this is a placeholder since the actual protocol doesn't support streaming yet
+	// Create a ProgressHandler that adapts our handler to the transport's expected type
+	progressHandler := func(params interface{}) error {
+		// Try to extract the JSON data from params
+		if data, ok := params.(json.RawMessage); ok {
+			handler(data)
+		} else {
+			// If it's not already RawMessage, try to marshal it
+			if jsonData, err := json.Marshal(params); err == nil {
+				handler(jsonData)
+			} else {
+				fmt.Printf("[ERROR] Failed to marshal progress data: %v\n", err)
+			}
+		}
+		return nil
+	}
+
+	// Register the handler with the transport
+	c.transport.RegisterProgressHandler(requestID, progressHandler)
 }

@@ -10,30 +10,27 @@ const (
 	JSONRPCVersion = "2.0"
 )
 
-// ErrorCode represents standard JSON-RPC 2.0 error codes
-type ErrorCode int
-
 // Standard error codes as per JSON-RPC 2.0 specification
 const (
-	ParseError     ErrorCode = -32700
-	InvalidRequest ErrorCode = -32600
-	MethodNotFound ErrorCode = -32601
-	InvalidParams  ErrorCode = -32602
-	InternalError  ErrorCode = -32603
+	ParseError     int = -32700
+	InvalidRequest int = -32600
+	MethodNotFound int = -32601
+	InvalidParams  int = -32602
+	InternalError  int = -32603
 )
 
 // MCP-specific error codes
 const (
 	// ServerInitError indicates an error during server initialization
-	ServerInitError ErrorCode = -32000
+	ServerInitError int = -32000
 	// UnauthorizedError indicates the client is not authorized to make a request
-	UnauthorizedError ErrorCode = -32001
+	UnauthorizedError int = -32001
 	// ResourceNotFound indicates a requested resource was not found
-	ResourceNotFound ErrorCode = -32002
+	ResourceNotFound int = -32002
 	// OperationCancelled indicates an operation was cancelled
-	OperationCancelled ErrorCode = -32003
+	OperationCancelled int = -32003
 	// InvalidCapability indicates a requested capability is not supported
-	InvalidCapability ErrorCode = -32004
+	InvalidCapability int = -32004
 )
 
 // JSONRPCMessage represents a JSON-RPC 2.0 message
@@ -95,15 +92,14 @@ func NewResponse(id interface{}, result interface{}) (*Response, error) {
 }
 
 // NewErrorResponse creates a new JSON-RPC 2.0 error response
-func NewErrorResponse(id interface{}, code ErrorCode, message string, data interface{}) (*Response, error) {
-	var dataJSON interface{}
+func NewErrorResponse(id interface{}, code int, message string, data interface{}) (*Response, error) {
+	var dataJSON json.RawMessage
+	var err error
 	if data != nil {
-		var err error
-		dataBytes, err := json.Marshal(data)
+		dataJSON, err = json.Marshal(data)
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal error data: %w", err)
 		}
-		dataJSON = json.RawMessage(dataBytes)
 	}
 
 	return &Response{
@@ -142,11 +138,19 @@ func NewNotification(method string, params interface{}) (*Notification, error) {
 	}, nil
 }
 
-// Error represents a JSON-RPC 2.0 error object
+// Error represents a JSON-RPC error object.
 type Error struct {
-	Code    ErrorCode   `json:"code"`
+	Code    int         `json:"code"`
 	Message string      `json:"message"`
 	Data    interface{} `json:"data,omitempty"`
+}
+
+// Error returns the error message string, satisfying the error interface.
+func (e *Error) Error() string {
+	if e == nil {
+		return ""
+	}
+	return fmt.Sprintf("jsonrpc: code %d, message: %s", e.Code, e.Message)
 }
 
 // IsRequest checks if a raw JSON message is a JSON-RPC 2.0 request

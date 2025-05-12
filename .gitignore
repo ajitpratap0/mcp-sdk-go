@@ -69,6 +69,28 @@ Thumbs.db
 *.log
 log/
 logs/
+**/logs/
+streamable-http-server/server.log
+streamable-http-client/client.log
+
+# Binary files and executables
+simple-client
+
+# Executables in cmd subdirectories
+cmd/streamable-http-server/streamable-http-server
+cmd/streamable-http-server/server
+cmd/streamable-http-client/streamable-http-client
+cmd/streamable-http-client/client
+
+# Executables in examples subdirectories
+examples/simple-client/simple-client
+examples/simple-server/simple-server
+examples/stdio-client/stdio-client
+examples/pagination-example/pagination-example
+# General rule for other potential binaries in examples (if any)
+examples/*/*
+!examples/*/*.go
+!examples/*/*.md
 
 # Test binary, built with 'go test -c'
 *.test

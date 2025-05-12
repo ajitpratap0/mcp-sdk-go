@@ -29,7 +29,10 @@ func main() {
 	}()
 
 	// Create a stdio transport for connecting to the server
-	t := transport.NewStdioTransport()
+
+	// Initialize StdioTransport using the new helper for default stdio
+	// t := transport.NewStdioTransport()
+	t := transport.NewStdioTransportWithStdInOut()
 
 	// Create client with needed capabilities
 	c := client.New(t,

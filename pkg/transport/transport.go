@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
+	"os"
 	"sync"
 	"time"
 
@@ -53,9 +55,6 @@ type Transport interface {
 	// Send transmits a message over the transport.
 	Send(data []byte) error
 
-	// SetReceiveHandler sets the handler for received messages.
-	SetReceiveHandler(handler ReceiveHandler)
-
 	// SetErrorHandler sets the handler for transport errors.
 	SetErrorHandler(handler ErrorHandler)
 }
@@ -76,7 +75,8 @@ type BaseTransport struct {
 	notificationHandlers map[string]NotificationHandler
 	progressHandlers     map[string]ProgressHandler
 	nextID               int64
-	pendingRequests      map[interface{}]chan *protocol.Response
+	pendingRequests      map[string]chan *protocol.Response
+	logger               *log.Logger
 }
 
 // NewBaseTransport creates a new BaseTransport
@@ -86,7 +86,25 @@ func NewBaseTransport() *BaseTransport {
 		notificationHandlers: make(map[string]NotificationHandler),
 		progressHandlers:     make(map[string]ProgressHandler),
 		nextID:               1,
-		pendingRequests:      make(map[interface{}]chan *protocol.Response),
+		pendingRequests:      make(map[string]chan *protocol.Response),
+		logger:               log.New(os.Stderr, "BaseTransport: ", log.LstdFlags|log.Lshortfile),
+	}
+}
+
+// SetLogger sets a custom logger for the BaseTransport.
+func (t *BaseTransport) SetLogger(logger *log.Logger) {
+	t.Lock()
+	defer t.Unlock()
+	t.logger = logger
+}
+
+// Logf logs a formatted string using the transport's logger.
+func (t *BaseTransport) Logf(format string, v ...interface{}) {
+	t.RLock()
+	logger := t.logger
+	t.RUnlock()
+	if logger != nil {
+		logger.Printf(format, v...)
 	}
 }
 
@@ -117,13 +135,16 @@ func (t *BaseTransport) GetNextID() int64 {
 func (t *BaseTransport) WaitForResponse(ctx context.Context, id interface{}) (*protocol.Response, error) {
 	ch := make(chan *protocol.Response, 1)
 
+	// Ensure id is a string for map key consistency
+	stringID := fmt.Sprintf("%v", id)
+
 	t.Lock()
-	t.pendingRequests[id] = ch
+	t.pendingRequests[stringID] = ch
 	t.Unlock()
 
 	defer func() {
 		t.Lock()
-		delete(t.pendingRequests, id)
+		delete(t.pendingRequests, stringID)
 		t.Unlock()
 	}()
 
@@ -137,16 +158,26 @@ func (t *BaseTransport) WaitForResponse(ctx context.Context, id interface{}) (*p
 
 // HandleResponse handles an incoming response
 func (t *BaseTransport) HandleResponse(resp *protocol.Response) {
+	// Convert response ID to string for consistent map lookup
+	stringID := fmt.Sprintf("%v", resp.ID)
+
 	t.RLock()
-	ch, ok := t.pendingRequests[resp.ID]
+	ch, ok := t.pendingRequests[stringID]
+	pendingReqsCount := len(t.pendingRequests)
 	t.RUnlock()
+
+	t.Logf("HandleResponse: Received response for ID '%s' (original: %v, type: %T). Pending requests: %d. Channel found: %t", stringID, resp.ID, resp.ID, pendingReqsCount, ok)
 
 	if ok {
 		select {
 		case ch <- resp:
+			t.Logf("HandleResponse: Successfully sent response for ID '%s' to channel.", stringID)
 		default:
-			// Response channel is full or closed
+			// Response channel is full or closed, or context expired waiting for send
+			t.Logf("HandleResponse: Failed to send response for ID '%s' to channel (channel full, closed, or context expired).", stringID)
 		}
+	} else {
+		t.Logf("HandleResponse: No pending request found for response ID '%s'.", stringID)
 	}
 }
 

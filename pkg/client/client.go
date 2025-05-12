@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"runtime"
 	"sync"
 	"time"
@@ -226,47 +227,43 @@ func New(t transport.Transport, options ...ClientOption) *ClientConfig {
 	return client
 }
 
-// Initialize initializes the client and performs capability negotiation
+// Initialize initializes the client with the provided context.
 func (c *ClientConfig) Initialize(ctx context.Context) error {
+	// Check if already initialized
 	c.initializedLock.RLock()
-	if c.initialized {
-		c.initializedLock.RUnlock()
+	initialized := c.initialized
+	c.initializedLock.RUnlock()
+	if initialized {
 		return nil
 	}
-	c.initializedLock.RUnlock()
 
-	// Initialize transport
-	if err := c.transport.Initialize(ctx); err != nil {
-		return fmt.Errorf("transport initialization failed: %w", err)
+	// Create request params
+	params := &protocol.InitializeParams{
+		ClientInfo: &protocol.ClientInfo{
+			Name:    c.name,
+			Version: c.version,
+		},
+		Capabilities: c.capabilities,
 	}
 
-	// Start transport in background
-	go func() {
-		if err := c.transport.Start(c.ctx); err != nil {
-			fmt.Printf("Transport error: %v\n", err)
-		}
-	}()
+	// Add the current OS information
+	if runtime.GOOS != "" {
+		params.ClientInfo.Platform = runtime.GOOS
+	}
+
+	// Add feature options if any
+	if len(c.featureOptions) > 0 {
+		params.FeatureOptions = c.featureOptions
+	}
 
 	// Send initialize request
-	params := &protocol.InitializeParams{
-		ProtocolVersion: protocol.ProtocolRevision,
-		Name:            c.name,
-		Version:         c.version,
-		Capabilities:    c.capabilities,
-		ClientInfo: &protocol.ClientInfo{
-			Name:     c.name,
-			Version:  c.version,
-			Platform: runtime.GOOS,
-		},
-		FeatureOptions: c.featureOptions,
-	}
-
+	fmt.Printf("[DEBUG] Sending initialize request with capabilities: %v\n", c.capabilities)
 	result, err := c.transport.SendRequest(ctx, protocol.MethodInitialize, params)
 	if err != nil {
 		return fmt.Errorf("initialize request failed: %w", err)
 	}
 
-	// Parse initialize result
+	// Parse the result
 	var initResult protocol.InitializeResult
 	if err := parseResult(result, &initResult); err != nil {
 		return fmt.Errorf("failed to parse initialize result: %w", err)
@@ -275,14 +272,35 @@ func (c *ClientConfig) Initialize(ctx context.Context) error {
 	// Store server info
 	c.serverInfo = initResult.ServerInfo
 
-	// Send initialized notification
-	if err := c.transport.SendNotification(ctx, protocol.MethodInitialized, &protocol.InitializedParams{}); err != nil {
-		return fmt.Errorf("initialized notification failed: %w", err)
+	// Store server capabilities
+	for cap, enabled := range initResult.Capabilities {
+		if enabled {
+			c.capabilities[cap] = true
+		}
 	}
 
+	// Check if we have a streamable HTTP transport and if we received a session ID
+	if t, ok := c.transport.(*transport.StreamableHTTPTransport); ok {
+		// Use reflection to check if the transport has a sessionID
+		val := reflect.ValueOf(t).Elem()
+		sidField := val.FieldByName("sessionID")
+		if sidField.IsValid() && sidField.String() != "" {
+			fmt.Printf("[DEBUG] Transport has session ID after initialize: %s\n", sidField.String())
+		} else {
+			fmt.Printf("[DEBUG] Transport does not have session ID after initialize\n")
+		}
+	}
+
+	// Mark as initialized
 	c.initializedLock.Lock()
 	c.initialized = true
 	c.initializedLock.Unlock()
+
+	// Send initialized notification
+	err = c.transport.SendNotification(ctx, protocol.MethodInitialized, nil)
+	if err != nil {
+		return fmt.Errorf("failed to send initialized notification: %w", err)
+	}
 
 	return nil
 }

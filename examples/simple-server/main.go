@@ -17,7 +17,7 @@ import (
 
 func main() {
 	// Create a stdio transport
-	t := transport.NewStdioTransport()
+	t := transport.NewStdioTransportWithStdInOut()
 
 	// Create and register tool provider
 	basicToolsProvider := server.NewBaseToolsProvider()

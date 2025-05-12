@@ -1,8 +1,8 @@
 package protocol
 
 import (
-	"encoding/json"
 	"time"
+	"fmt"
 )
 
 const (
@@ -200,7 +200,19 @@ type LogParams struct {
 	Message string          `json:"message"`
 	Source  string          `json:"source,omitempty"`
 	Time    time.Time       `json:"time,omitempty"`
-	Data    json.RawMessage `json:"data,omitempty"`
+	Data    interface{}     `json:"data,omitempty"`
+}
+
+// ErrorObject defines the structure for a JSON-RPC error.
+type ErrorObject struct {
+	Code    int         `json:"code"`
+	Message string      `json:"message"`
+	Data    interface{} `json:"data,omitempty"`
+}
+
+// Error returns a string representation of the ErrorObject.
+func (e *ErrorObject) Error() string {
+	return fmt.Sprintf("rpc error: code = %d desc = %s", e.Code, e.Message)
 }
 
 // PaginationParams for requests that support pagination

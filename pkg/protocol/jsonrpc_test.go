@@ -2,7 +2,10 @@ package protocol
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestJSONRPCMessage(t *testing.T) {
@@ -340,5 +343,35 @@ func TestIsNotification(t *testing.T) {
 	// Wrong JSON-RPC version
 	if IsNotification([]byte(`{"jsonrpc": "1.0", "method": "test"}`)) {
 		t.Error("Expected IsNotification to return false for notification with wrong JSON-RPC version")
+	}
+}
+
+func TestError_ErrorMethod(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      *Error
+		expected string
+	}{
+		{
+			name: "Typical error",
+			err:      &Error{Code: InvalidRequest, Message: "Invalid Request"},
+			expected: fmt.Sprintf("jsonrpc: code %d, message: Invalid Request", InvalidRequest),
+		},
+		{
+			name: "Error with data",
+			err:      &Error{Code: InternalError, Message: "Internal Error", Data: "some data"},
+			expected: fmt.Sprintf("jsonrpc: code %d, message: Internal Error", InternalError),
+		},
+		{
+			name:     "Nil error",
+			err:      nil,
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, tt.err.Error())
+		})
 	}
 }

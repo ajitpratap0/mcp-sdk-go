@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/ajitpratap0/mcp-sdk-go/pkg/protocol"
 )
@@ -146,11 +147,19 @@ func (t *HTTPTransport) Start(ctx context.Context) error {
 			return ctx.Err()
 
 		case err := <-t.eventSource.ErrorChan:
+			// Log the error
+			fmt.Printf("EventSource error: %v. Attempting to reconnect...\n", err)
+
 			// Try to reconnect on error
 			t.eventSource.Close()
+
+			// Introduce a delay before reconnecting
+			time.Sleep(5 * time.Second)
+
 			if reconnectErr := t.eventSource.Connect(); reconnectErr != nil {
 				return fmt.Errorf("failed to reconnect after error %v: %w", err, reconnectErr)
 			}
+			fmt.Println("EventSource reconnected successfully.")
 
 		case data := <-t.eventSource.MessageChan:
 			if err := t.handleMessage(ctx, data); err != nil {

@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  app:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ..:/workspace:cached
+      - go-cache:/go
+    command: sleep infinity
+    environment:
+      - GO111MODULE=on
+      - GOPRIVATE=github.com/ajitpratap0/*
+    # Uncomment the next line to use a non-root user for all processes.
+    user: vscode
+    # Use "forwardPorts" in devcontainer.json to forward ports
+
+volumes:
+  go-cache:

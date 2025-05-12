@@ -5,6 +5,10 @@ A professional, high-performance implementation of the [Model Context Protocol (
 [![Go Reference](https://pkg.go.dev/badge/github.com/ajitpratap0/mcp-sdk-go.svg)](https://pkg.go.dev/github.com/ajitpratap0/mcp-sdk-go)
 [![GitHub license](https://img.shields.io/github/license/ajitpratap0/mcp-sdk-go)](https://github.com/ajitpratap0/mcp-sdk-go/blob/main/LICENSE)
 [![codecov](https://codecov.io/gh/ajitpratap0/mcp-sdk-go/branch/main/graph/badge.svg)](https://codecov.io/gh/ajitpratap0/mcp-sdk-go)
+[![Go Report Card](https://goreportcard.com/badge/github.com/ajitpratap0/mcp-sdk-go)](https://goreportcard.com/report/github.com/ajitpratap0/mcp-sdk-go)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/ajitpratap0/mcp-sdk-go)](https://go.dev/)
+[![CI Status](https://github.com/ajitpratap0/mcp-sdk-go/workflows/CI/badge.svg)](https://github.com/ajitpratap0/mcp-sdk-go/actions)
+[![Release](https://img.shields.io/github/release/ajitpratap0/mcp-sdk-go.svg)](https://github.com/ajitpratap0/mcp-sdk-go/releases)
 
 ## Table of Contents
 

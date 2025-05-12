@@ -257,7 +257,11 @@ func (t *StdioTransport) GenerateID() string {
 func (t *StdioTransport) SendRequest(ctx context.Context, method string, params interface{}) (interface{}, error) {
 	t.Logf("SendRequest: Method=%s, Params=%+v", method, params)
 	id := t.BaseTransport.GenerateID()
-	req, err := protocol.NewRequest(id, method, params) // Correctly handle two return values
+
+	// Ensure ID is stored as a string in pendingRequests map before sending the request
+	stringID := fmt.Sprintf("%v", id)
+
+	req, err := protocol.NewRequest(stringID, method, params) // Use stringID to ensure consistent type
 	if err != nil {
 		return nil, fmt.Errorf("error creating request: %w", err)
 	}
@@ -272,15 +276,15 @@ func (t *StdioTransport) SendRequest(ctx context.Context, method string, params 
 		return nil, fmt.Errorf("error sending request bytes: %w", err)
 	}
 
-	t.Logf("SendRequest: Request sent, waiting for response ID %s", id)
+	t.Logf("SendRequest: Request sent, waiting for response ID %s", stringID)
 	// WaitForResponse should return *protocol.Response or an error
-	pResp, err := t.BaseTransport.WaitForResponse(ctx, id)
+	pResp, err := t.BaseTransport.WaitForResponse(ctx, stringID)
 	if err != nil {
-		t.Logf("SendRequest: Error waiting for response ID %s: %v", id, err)
+		t.Logf("SendRequest: Error waiting for response ID %s: %v", stringID, err)
 		return nil, fmt.Errorf("error waiting for response: %w", err)
 	}
 
-	t.Logf("SendRequest: Received response for ID %s: %+v", id, pResp)
+	t.Logf("SendRequest: Received response for ID %s: %+v", stringID, pResp)
 
 	// If the response itself contains a JSON-RPC error, return that error object.
 	// The client.Client layer is responsible for interpreting this.

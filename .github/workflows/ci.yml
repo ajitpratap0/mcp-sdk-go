@@ -20,22 +20,28 @@ jobs:
           go-version: '1.24.2'  # Match go.mod version
           cache: true
 
+      # Manual installation instead of using the golangci-lint-action to have more control
       - name: Install golangci-lint
-        uses: golangci/golangci-lint-action@v3
-        with:
-          version: latest
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v1.64.8
+          golangci-lint --version
 
-      - name: Setup dependencies
+      # Force all dependencies to be downloaded and compiled before linting
+      - name: Force dependency resolution
         run: |
           go mod tidy
           go mod download
-          go build -o /dev/null ./... || true  # Force module resolution
+          go test -run=^$ ./... || true  # Compiles test dependencies without running tests
+          go build -o /dev/null ./... || true  # Additional way to force module resolution
+
+      # Explicitly install testify since it's a common cause of linting issues
+      - name: Ensure testify is available
+        run: go get github.com/stretchr/testify@v1.8.4
 
       - name: Lint
         run: |
-          go version
-          golangci-lint version
-          golangci-lint run ./... --timeout=5m -v
+          export PATH=$PATH:$(go env GOPATH)/bin
+          golangci-lint run --timeout=5m -v --out-format=colored-line-number
 
   test:
     name: Test

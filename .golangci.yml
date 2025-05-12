@@ -4,10 +4,8 @@ run:
   tests: true
   go: '1.24.2'  # Match go.mod version
 
-output:
-  # Use the new format to avoid deprecation warnings
-  formats:
-    - format: colored-line-number
+# We don't specify output format here, as it should be set by command line
+# This allows flexibility between CI (which uses --out-format flag) and local runs
 
 linters-settings:
   errcheck:

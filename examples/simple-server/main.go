@@ -16,6 +16,7 @@ import (
 )
 
 func main() {
+	// log.SetOutput(os.Stderr)
 	// Create a stdio transport
 	t := transport.NewStdioTransportWithStdInOut()
 

@@ -133,6 +133,7 @@ func (t *BaseTransport) GetNextID() int64 {
 
 // WaitForResponse waits for a response with the specified ID
 func (t *BaseTransport) WaitForResponse(ctx context.Context, id interface{}) (*protocol.Response, error) {
+	t.Logf("WaitForResponse: Waiting for response with ID '%v'", id)
 	ch := make(chan *protocol.Response, 1)
 
 	// Ensure id is a string for map key consistency
@@ -148,6 +149,7 @@ func (t *BaseTransport) WaitForResponse(ctx context.Context, id interface{}) (*p
 		t.Unlock()
 	}()
 
+	t.Logf("WaitForResponse: Setting up channel for ID '%s'", stringID)
 	select {
 	case resp := <-ch:
 		return resp, nil
@@ -158,6 +160,7 @@ func (t *BaseTransport) WaitForResponse(ctx context.Context, id interface{}) (*p
 
 // HandleResponse handles an incoming response
 func (t *BaseTransport) HandleResponse(resp *protocol.Response) {
+	t.Logf("HandleResponse: Received response for ID '%v'", resp.ID)
 	// Convert response ID to string for consistent map lookup
 	stringID := fmt.Sprintf("%v", resp.ID)
 

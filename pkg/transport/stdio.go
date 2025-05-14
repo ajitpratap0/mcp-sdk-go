@@ -54,6 +54,7 @@ func (t *StdioTransport) Initialize(ctx context.Context) error {
 // Start begins reading messages from stdin and processing them.
 // This method blocks until the context is canceled or an error occurs.
 func (t *StdioTransport) Start(ctx context.Context) error {
+	t.BaseTransport.Logf("StdioTransport.Start: Starting transport with context: %v", ctx)
 	// Create a scanner for reading lines from the reader
 	scanner := bufio.NewScanner(t.reader)
 
@@ -63,9 +64,10 @@ func (t *StdioTransport) Start(ctx context.Context) error {
 	// Set up a goroutine to read from stdin
 	go func() {
 		defer close(scannerDone)
-
+		t.BaseTransport.Logf("StdioTransport.Start: Starting scanner goroutine")
 		// Read lines until EOF or error
 		for scanner.Scan() {
+			t.BaseTransport.Logf("StdioTransport.Start: Scanner read a line")
 			// Get the line (should be a complete JSON message)
 			line := scanner.Bytes()
 
@@ -114,23 +116,26 @@ func (t *StdioTransport) Stop(ctx context.Context) error {
 // For StdioTransport, this writes a line to stdout.
 func (t *StdioTransport) Send(data []byte) error {
 	// Acquire a lock to prevent concurrent writes
+	t.BaseTransport.Logf("StdioTransport.Send: Acquiring lock to send data: %s", string(data))
 	t.mutex.Lock()
 	defer t.mutex.Unlock()
 
 	if t.rawWriter == nil {
 		return fmt.Errorf("transport writer is not initialized")
 	}
-
+	t.BaseTransport.Logf("StdioTransport.Send: Writing data: %s", string(data))
 	// Write the message followed by a newline
 	if _, err := t.rawWriter.Write(data); err != nil {
 		return fmt.Errorf("error writing to output: %w", err)
 	}
 
+	t.BaseTransport.Logf("StdioTransport.Send: Writing newline to output")
 	// Write a newline to terminate the message
 	if err := t.rawWriter.WriteByte('\n'); err != nil {
 		return fmt.Errorf("error writing newline to output: %w", err)
 	}
 
+	t.BaseTransport.Logf("StdioTransport.Send: Flushing buffer")
 	// Flush the buffer to ensure the message is sent
 	if err := t.rawWriter.Flush(); err != nil {
 		return fmt.Errorf("error flushing output: %w", err)

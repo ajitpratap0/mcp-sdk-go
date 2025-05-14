@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"reflect"
 	"runtime"
 	"sync"
@@ -262,7 +263,8 @@ func (c *ClientConfig) Initialize(ctx context.Context) error {
 	}
 
 	// Send initialize request
-	fmt.Printf("[DEBUG] Sending initialize request with capabilities: %v\n", c.capabilities)
+	// fmt.Printf("[DEBUG] Sending initialize request with capabilities: %v\n", c.capabilities)
+	fmt.Fprintln(os.Stderr, "[DEBUG] Sending initialize request with capabilities: %v\n", c.capabilities)
 	result, err := c.transport.SendRequest(ctx, protocol.MethodInitialize, params)
 	if err != nil {
 		return fmt.Errorf("initialize request failed: %w", err)

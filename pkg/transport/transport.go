@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -182,7 +183,17 @@ func (t *BaseTransport) HandleResponse(resp *protocol.Response) {
 }
 
 // HandleRequest processes an incoming request
-func (t *BaseTransport) HandleRequest(ctx context.Context, req *protocol.Request) (*protocol.Response, error) {
+func (t *BaseTransport) HandleRequest(ctx context.Context, req *protocol.Request) (response *protocol.Response, err error) {
+	// Recover from panics and convert to proper error response
+	defer func() {
+		if r := recover(); r != nil {
+			stackTrace := string(debug.Stack())
+			t.Logf("ERROR: Panic in HandleRequest for method %s: %v\nStack trace:\n%s", req.Method, r, stackTrace)
+			response, err = protocol.NewErrorResponse(req.ID, protocol.InternalError,
+				fmt.Sprintf("Internal server error processing %s", req.Method), nil)
+		}
+	}()
+
 	t.RLock()
 	handler, ok := t.requestHandlers[req.Method]
 	t.RUnlock()
@@ -204,7 +215,16 @@ func (t *BaseTransport) HandleRequest(ctx context.Context, req *protocol.Request
 }
 
 // HandleNotification processes an incoming notification
-func (t *BaseTransport) HandleNotification(ctx context.Context, notif *protocol.Notification) error {
+func (t *BaseTransport) HandleNotification(ctx context.Context, notif *protocol.Notification) (err error) {
+	// Recover from panics in notification handlers
+	defer func() {
+		if r := recover(); r != nil {
+			stackTrace := string(debug.Stack())
+			t.Logf("ERROR: Panic in HandleNotification for method %s: %v\nStack trace:\n%s", notif.Method, r, stackTrace)
+			err = fmt.Errorf("internal error processing notification %s: %v", notif.Method, r)
+		}
+	}()
+
 	// Special handling for progress notifications
 	if notif.Method == protocol.MethodProgress && len(notif.Params) > 0 {
 		// Extract the request ID from the progress params
@@ -238,6 +258,19 @@ func (t *BaseTransport) HandleNotification(ctx context.Context, notif *protocol.
 
 // DefaultTimeout is the default timeout for requests
 const DefaultTimeout = 30 * time.Second
+
+// SafeGo runs a function in a goroutine with panic recovery
+func SafeGo(logger func(format string, args ...interface{}), name string, fn func()) {
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				stackTrace := string(debug.Stack())
+				logger("ERROR: Panic in goroutine %s: %v\nStack trace:\n%s", name, r, stackTrace)
+			}
+		}()
+		fn()
+	}()
+}
 
 // Options contains configuration options for transports
 type Options struct {

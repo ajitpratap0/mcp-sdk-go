@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime/debug"
 	"sync"
 
 	"github.com/ajitpratap0/mcp-sdk-go/pkg/protocol"
@@ -61,7 +62,7 @@ func (t *StdioTransport) Start(ctx context.Context) error {
 	scannerDone := make(chan struct{})
 
 	// Set up a goroutine to read from stdin
-	go func() {
+	SafeGo(t.BaseTransport.Logf, "stdio-scanner", func() {
 		defer close(scannerDone)
 
 		// Read lines until EOF or error
@@ -74,14 +75,16 @@ func (t *StdioTransport) Start(ctx context.Context) error {
 			copy(data, line)
 
 			// Process the message in a goroutine to avoid blocking
-			go t.processMessage(data)
+			SafeGo(t.BaseTransport.Logf, "stdio-process-message", func() {
+				t.processMessage(data)
+			})
 		}
 
 		// Check for scanner errors
 		if err := scanner.Err(); err != nil && err != io.EOF {
 			t.handleError(fmt.Errorf("error reading from input: %w", err))
 		}
-	}()
+	})
 
 	// Wait for either the context to be canceled or the scanner to finish
 	select {
@@ -148,6 +151,15 @@ func (t *StdioTransport) SetErrorHandler(handler ErrorHandler) {
 
 // processMessage handles a received message by validating it and passing it to the receive handler.
 func (t *StdioTransport) processMessage(data []byte) {
+	// Recover from panics in message processing
+	defer func() {
+		if r := recover(); r != nil {
+			stackTrace := string(debug.Stack())
+			t.BaseTransport.Logf("ERROR: Panic in processMessage: %v\nStack trace:\n%s", r, stackTrace)
+			t.handleError(fmt.Errorf("panic processing message: %v", r))
+		}
+	}()
+
 	t.BaseTransport.Logf("StdioTransport.processMessage: Received raw data: %s", string(data))
 	// Attempt to determine message type by unmarshalling into a generic map
 	var genericMsg map[string]interface{}

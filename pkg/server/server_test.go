@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -487,5 +488,792 @@ func TestParseParams(t *testing.T) {
 	err = parseParams(nil, &target)
 	if err == nil {
 		t.Error("Expected parseParams to fail with nil params")
+	}
+}
+
+// Test logging methods
+func TestServerLogging(t *testing.T) {
+	mt := newMockTransport()
+	server := New(mt)
+
+	// Test default logger methods (access through logger field)
+	server.logger.Debug("Debug message: %s", "test")
+	server.logger.Warn("Warning message: %d", 42)
+	server.logger.Error("Error message: %v", errors.New("test error"))
+
+	// Test with custom logger
+	customLogger := &mockLogger{}
+	server = New(mt, WithLogger(customLogger))
+
+	server.logger.Debug("Custom debug")
+	server.logger.Info("Custom info")
+	server.logger.Warn("Custom warn")
+	server.logger.Error("Custom error")
+
+	if customLogger.debugCalled == 0 {
+		t.Error("Expected Debug to be called on custom logger")
+	}
+	if customLogger.infoCalled == 0 {
+		t.Error("Expected Info to be called on custom logger")
+	}
+	if customLogger.warnCalled == 0 {
+		t.Error("Expected Warn to be called on custom logger")
+	}
+	if customLogger.errorCalled == 0 {
+		t.Error("Expected Error to be called on custom logger")
+	}
+}
+
+// mockLogger for testing
+type mockLogger struct {
+	debugCalled int
+	infoCalled  int
+	warnCalled  int
+	errorCalled int
+}
+
+func (l *mockLogger) Debug(msg string, args ...interface{}) {
+	l.debugCalled++
+}
+
+func (l *mockLogger) Info(msg string, args ...interface{}) {
+	l.infoCalled++
+}
+
+func (l *mockLogger) Warn(msg string, args ...interface{}) {
+	l.warnCalled++
+}
+
+func (l *mockLogger) Error(msg string, args ...interface{}) {
+	l.errorCalled++
+}
+
+// Test provider setters
+func TestServerProviderOptions(t *testing.T) {
+	mt := newMockTransport()
+
+	// Test WithResourcesProvider
+	resourcesProvider := &mockServerResourcesProvider{}
+	server := New(mt, WithResourcesProvider(resourcesProvider))
+
+	if server.resourcesProvider == nil {
+		t.Error("Expected resources provider to be set")
+	}
+
+	if !server.capabilities[string(protocol.CapabilityResources)] {
+		t.Error("Expected resources capability to be enabled")
+	}
+
+	// Check that resource handlers are registered
+	if _, ok := mt.requestHandlers[string(protocol.MethodListResources)]; !ok {
+		t.Error("Expected ListResources handler to be registered")
+	}
+
+	if _, ok := mt.requestHandlers[string(protocol.MethodReadResource)]; !ok {
+		t.Error("Expected ReadResource handler to be registered")
+	}
+
+	// Test WithPromptsProvider
+	promptsProvider := &mockPromptsProvider{}
+	server = New(mt, WithPromptsProvider(promptsProvider))
+
+	if server.promptsProvider == nil {
+		t.Error("Expected prompts provider to be set")
+	}
+
+	if !server.capabilities[string(protocol.CapabilityPrompts)] {
+		t.Error("Expected prompts capability to be enabled")
+	}
+
+	// Test WithCompletionProvider
+	completionProvider := &mockCompletionProvider{}
+	server = New(mt, WithCompletionProvider(completionProvider))
+
+	if server.completionProvider == nil {
+		t.Error("Expected completion provider to be set")
+	}
+
+	if !server.capabilities[string(protocol.CapabilityComplete)] {
+		t.Error("Expected completion capability to be enabled")
+	}
+
+	// Test WithRootsProvider
+	rootsProvider := &mockRootsProvider{}
+	server = New(mt, WithRootsProvider(rootsProvider))
+
+	if server.rootsProvider == nil {
+		t.Error("Expected roots provider to be set")
+	}
+
+	if !server.capabilities[string(protocol.CapabilityRoots)] {
+		t.Error("Expected roots capability to be enabled")
+	}
+}
+
+// Mock providers for testing (avoid conflict with providers_test.go)
+type mockServerResourcesProvider struct {
+	resources []protocol.Resource
+	templates []protocol.ResourceTemplate
+	err       error
+}
+
+func (m *mockServerResourcesProvider) ListResources(ctx context.Context, uri string, recursive bool, pagination *protocol.PaginationParams) ([]protocol.Resource, []protocol.ResourceTemplate, int, string, bool, error) {
+	if m.err != nil {
+		return nil, nil, 0, "", false, m.err
+	}
+	return m.resources, m.templates, len(m.resources), "", false, nil
+}
+
+func (m *mockServerResourcesProvider) ReadResource(ctx context.Context, uri string, templateParams map[string]interface{}, rangeOpt *protocol.ResourceRange) (*protocol.ResourceContents, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return &protocol.ResourceContents{
+		URI:     uri,
+		Type:    "text/plain",
+		Content: json.RawMessage(`"test content"`),
+	}, nil
+}
+
+func (m *mockServerResourcesProvider) SubscribeResource(ctx context.Context, uri string, recursive bool) (bool, error) {
+	return true, m.err
+}
+
+type mockPromptsProvider struct {
+	prompts []protocol.Prompt
+	err     error
+}
+
+func (m *mockPromptsProvider) ListPrompts(ctx context.Context, tag string, pagination *protocol.PaginationParams) ([]protocol.Prompt, int, string, bool, error) {
+	if m.err != nil {
+		return nil, 0, "", false, m.err
+	}
+	return m.prompts, len(m.prompts), "", false, nil
+}
+
+func (m *mockPromptsProvider) GetPrompt(ctx context.Context, id string) (*protocol.Prompt, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	for _, prompt := range m.prompts {
+		if prompt.ID == id {
+			return &prompt, nil
+		}
+	}
+	return nil, errors.New("prompt not found")
+}
+
+type mockCompletionProvider struct {
+	err error
+}
+
+func (m *mockCompletionProvider) Complete(ctx context.Context, params *protocol.CompleteParams) (*protocol.CompleteResult, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return &protocol.CompleteResult{
+		Content:      "Completion result",
+		Model:        "test-model",
+		FinishReason: "stop",
+	}, nil
+}
+
+type mockRootsProvider struct {
+	roots []protocol.Root
+	err   error
+}
+
+func (m *mockRootsProvider) ListRoots(ctx context.Context, tag string, pagination *protocol.PaginationParams) ([]protocol.Root, int, string, bool, error) {
+	if m.err != nil {
+		return nil, 0, "", false, m.err
+	}
+	return m.roots, len(m.roots), "", false, nil
+}
+
+// Test notification methods
+func TestServerNotifications(t *testing.T) {
+	mt := newMockTransport()
+	server := New(mt)
+
+	// Initialize server first
+	server.initializedLock.Lock()
+	server.initialized = true
+	server.initializedLock.Unlock()
+
+	// Test NotifyResourcesChanged
+	resources := []protocol.Resource{
+		{URI: "test://resource1", Type: "text"},
+	}
+	err := server.NotifyResourcesChanged("test://", resources, []string{"removed1"}, resources, resources)
+	if err != nil {
+		t.Errorf("Expected NotifyResourcesChanged to succeed, got error: %v", err)
+	}
+
+	if _, ok := mt.sentNotifications[string(protocol.MethodResourcesChanged)]; !ok {
+		t.Error("Expected resourcesChanged notification to be sent")
+	}
+
+	// Test NotifyResourceUpdated
+	contents := &protocol.ResourceContents{
+		URI:     "test://resource1",
+		Type:    "text/plain",
+		Content: json.RawMessage(`"updated content"`),
+	}
+	err = server.NotifyResourceUpdated("test://resource1", contents, false)
+	if err != nil {
+		t.Errorf("Expected NotifyResourceUpdated to succeed, got error: %v", err)
+	}
+
+	// Test NotifyResourceUpdated with deletion
+	err = server.NotifyResourceUpdated("test://deleted", nil, true)
+	if err != nil {
+		t.Errorf("Expected NotifyResourceUpdated (delete) to succeed, got error: %v", err)
+	}
+
+	// Test NotifyPromptsChanged
+	prompts := []protocol.Prompt{
+		{ID: "prompt1", Name: "Test Prompt"},
+	}
+	err = server.NotifyPromptsChanged(prompts, []string{"removed1"}, prompts)
+	if err != nil {
+		t.Errorf("Expected NotifyPromptsChanged to succeed, got error: %v", err)
+	}
+
+	// Test NotifyRootsChanged
+	roots := []protocol.Root{
+		{ID: "root1", Name: "Test Root"},
+	}
+	err = server.NotifyRootsChanged(roots, []string{"removed1"}, roots)
+	if err != nil {
+		t.Errorf("Expected NotifyRootsChanged to succeed, got error: %v", err)
+	}
+
+	// Test notifications when server not initialized
+	server.initializedLock.Lock()
+	server.initialized = false
+	server.initializedLock.Unlock()
+
+	err = server.NotifyResourcesChanged("", nil, nil, nil, nil)
+	if err == nil {
+		t.Error("Expected NotifyResourcesChanged to fail when server not initialized")
+	}
+
+	err = server.NotifyResourceUpdated("", nil, false)
+	if err == nil {
+		t.Error("Expected NotifyResourceUpdated to fail when server not initialized")
+	}
+
+	err = server.NotifyPromptsChanged(nil, nil, nil)
+	if err == nil {
+		t.Error("Expected NotifyPromptsChanged to fail when server not initialized")
+	}
+
+	err = server.NotifyRootsChanged(nil, nil, nil)
+	if err == nil {
+		t.Error("Expected NotifyRootsChanged to fail when server not initialized")
+	}
+}
+
+// Test protocol method handlers
+func TestServerProtocolHandlers(t *testing.T) {
+	mt := newMockTransport()
+
+	// Create providers
+	toolsProvider := &mockToolsProvider{
+		tools: []protocol.Tool{
+			{Name: "test-tool", Description: "A test tool"},
+		},
+	}
+	resourcesProvider := &mockServerResourcesProvider{
+		resources: []protocol.Resource{
+			{URI: "test://resource1", Type: "text"},
+		},
+	}
+	promptsProvider := &mockPromptsProvider{
+		prompts: []protocol.Prompt{
+			{ID: "prompt1", Name: "Test Prompt"},
+		},
+	}
+	completionProvider := &mockCompletionProvider{}
+	rootsProvider := &mockRootsProvider{
+		roots: []protocol.Root{
+			{ID: "root1", Name: "Test Root"},
+		},
+	}
+
+	server := New(mt,
+		WithToolsProvider(toolsProvider),
+		WithResourcesProvider(resourcesProvider),
+		WithPromptsProvider(promptsProvider),
+		WithCompletionProvider(completionProvider),
+		WithRootsProvider(rootsProvider),
+	)
+
+	ctx := context.Background()
+
+	// Test handleListTools
+	listToolsParams := &protocol.ListToolsParams{
+		Category: "",
+		PaginationParams: protocol.PaginationParams{
+			Limit: 10,
+		},
+	}
+	result, err := server.handleListTools(ctx, listToolsParams)
+	if err != nil {
+		t.Errorf("Expected handleListTools to succeed, got error: %v", err)
+	}
+	listResult, ok := result.(*protocol.ListToolsResult)
+	if !ok {
+		t.Errorf("Expected *protocol.ListToolsResult, got %T", result)
+	} else if len(listResult.Tools) != 1 {
+		t.Errorf("Expected 1 tool, got %d", len(listResult.Tools))
+	}
+
+	// Test handleCallTool
+	callToolParams := &protocol.CallToolParams{
+		Name:  "test-tool",
+		Input: json.RawMessage(`{"param": "value"}`),
+	}
+	_, err = server.handleCallTool(ctx, callToolParams)
+	if err != nil {
+		t.Errorf("Expected handleCallTool to succeed, got error: %v", err)
+	}
+
+	// Test handleListResources
+	listResourcesParams := &protocol.ListResourcesParams{
+		URI: "",
+		PaginationParams: protocol.PaginationParams{
+			Limit: 10,
+		},
+	}
+	_, err = server.handleListResources(ctx, listResourcesParams)
+	if err != nil {
+		t.Errorf("Expected handleListResources to succeed, got error: %v", err)
+	}
+
+	// Test handleReadResource
+	readResourceParams := &protocol.ReadResourceParams{
+		URI: "test://resource1",
+	}
+	_, err = server.handleReadResource(ctx, readResourceParams)
+	if err != nil {
+		t.Errorf("Expected handleReadResource to succeed, got error: %v", err)
+	}
+
+	// Test handleListPrompts
+	listPromptsParams := &protocol.ListPromptsParams{
+		Tag: "",
+		PaginationParams: protocol.PaginationParams{
+			Limit: 10,
+		},
+	}
+	_, err = server.handleListPrompts(ctx, listPromptsParams)
+	if err != nil {
+		t.Errorf("Expected handleListPrompts to succeed, got error: %v", err)
+	}
+
+	// Test handleGetPrompt
+	getPromptParams := &protocol.GetPromptParams{
+		ID: "prompt1",
+	}
+	_, err = server.handleGetPrompt(ctx, getPromptParams)
+	if err != nil {
+		t.Errorf("Expected handleGetPrompt to succeed, got error: %v", err)
+	}
+
+	// Test handleComplete
+	completeParams := &protocol.CompleteParams{
+		Messages: []protocol.Message{
+			{Role: "user", Content: "Hello"},
+		},
+	}
+	_, err = server.handleComplete(ctx, completeParams)
+	if err != nil {
+		t.Errorf("Expected handleComplete to succeed, got error: %v", err)
+	}
+
+	// Test handleListRoots
+	listRootsParams := &protocol.ListRootsParams{
+		Tag: "",
+		PaginationParams: protocol.PaginationParams{
+			Limit: 10,
+		},
+	}
+	_, err = server.handleListRoots(ctx, listRootsParams)
+	if err != nil {
+		t.Errorf("Expected handleListRoots to succeed, got error: %v", err)
+	}
+}
+
+// Test handler error cases
+func TestServerHandlerErrors(t *testing.T) {
+	mt := newMockTransport()
+	server := New(mt) // No providers configured
+
+	ctx := context.Background()
+
+	// Test handlers without providers
+	_, err := server.handleListTools(ctx, &protocol.ListToolsParams{})
+	if err == nil {
+		t.Error("Expected handleListTools to fail without tools provider")
+	}
+
+	_, err = server.handleCallTool(ctx, &protocol.CallToolParams{})
+	if err == nil {
+		t.Error("Expected handleCallTool to fail without tools provider")
+	}
+
+	_, err = server.handleListResources(ctx, &protocol.ListResourcesParams{})
+	if err == nil {
+		t.Error("Expected handleListResources to fail without resources provider")
+	}
+
+	_, err = server.handleReadResource(ctx, &protocol.ReadResourceParams{})
+	if err == nil {
+		t.Error("Expected handleReadResource to fail without resources provider")
+	}
+
+	_, err = server.handleListPrompts(ctx, &protocol.ListPromptsParams{})
+	if err == nil {
+		t.Error("Expected handleListPrompts to fail without prompts provider")
+	}
+
+	_, err = server.handleGetPrompt(ctx, &protocol.GetPromptParams{})
+	if err == nil {
+		t.Error("Expected handleGetPrompt to fail without prompts provider")
+	}
+
+	_, err = server.handleComplete(ctx, &protocol.CompleteParams{})
+	if err == nil {
+		t.Error("Expected handleComplete to fail without completion provider")
+	}
+
+	_, err = server.handleListRoots(ctx, &protocol.ListRootsParams{})
+	if err == nil {
+		t.Error("Expected handleListRoots to fail without roots provider")
+	}
+}
+
+// Test SendLog and SendProgress methods
+func TestServerSendMethods(t *testing.T) {
+	mt := newMockTransport()
+	server := New(mt)
+
+	// Initialize server first
+	server.initializedLock.Lock()
+	server.initialized = true
+	server.initializedLock.Unlock()
+
+	// Test SendLog
+	err := server.SendLog(protocol.LogLevelInfo, "Test log message", "test-source", map[string]interface{}{"key": "value"})
+	if err != nil {
+		t.Errorf("Expected SendLog to succeed, got error: %v", err)
+	}
+
+	// Test SendLog with nil data
+	err = server.SendLog(protocol.LogLevelError, "Error message", "test-source", nil)
+	if err != nil {
+		t.Errorf("Expected SendLog with nil data to succeed, got error: %v", err)
+	}
+
+	// Test SendProgress
+	err = server.SendProgress("progress-id", "Processing...", 50.0, false)
+	if err != nil {
+		t.Errorf("Expected SendProgress to succeed, got error: %v", err)
+	}
+
+	// Test SendProgress completion
+	err = server.SendProgress("progress-id", "Completed", 100.0, true)
+	if err != nil {
+		t.Errorf("Expected SendProgress completion to succeed, got error: %v", err)
+	}
+
+	// Test methods when server not initialized
+	server.initializedLock.Lock()
+	server.initialized = false
+	server.initializedLock.Unlock()
+
+	err = server.SendLog(protocol.LogLevelInfo, "Test", "test", nil)
+	if err == nil {
+		t.Error("Expected SendLog to fail when server not initialized")
+	}
+
+	err = server.SendProgress("id", "test", 0, false)
+	if err == nil {
+		t.Error("Expected SendProgress to fail when server not initialized")
+	}
+}
+
+// Test additional handler methods
+func TestServerAdditionalHandlers(t *testing.T) {
+	mt := newMockTransport()
+	server := New(mt, WithCapability(protocol.CapabilityLogging, true))
+
+	ctx := context.Background()
+
+	// Test handleSetCapability
+	setCapParams := &protocol.SetCapabilityParams{
+		Capability: "test-capability",
+		Value:      true,
+	}
+	result, err := server.handleSetCapability(ctx, setCapParams)
+	if err != nil {
+		t.Errorf("Expected handleSetCapability to succeed, got error: %v", err)
+	}
+	setCapResult, ok := result.(*protocol.SetCapabilityResult)
+	if !ok {
+		t.Errorf("Expected *protocol.SetCapabilityResult, got %T", result)
+	} else if !setCapResult.Success {
+		t.Error("Expected SetCapability to return success true")
+	}
+
+	// Test handleCancel
+	cancelParams := &protocol.CancelParams{
+		ID: "test-request-id",
+	}
+	_, err = server.handleCancel(ctx, cancelParams)
+	if err != nil {
+		t.Errorf("Expected handleCancel to succeed, got error: %v", err)
+	}
+
+	// Test handlePing
+	pingParams := &protocol.PingParams{
+		Timestamp: 1234567890,
+	}
+	result, err = server.handlePing(ctx, pingParams)
+	if err != nil {
+		t.Errorf("Expected handlePing to succeed, got error: %v", err)
+	}
+	pingResult, ok := result.(*protocol.PingResult)
+	if !ok {
+		t.Errorf("Expected *protocol.PingResult, got %T", result)
+	} else if pingResult.Timestamp != 1234567890 {
+		t.Errorf("Expected timestamp 1234567890, got %d", pingResult.Timestamp)
+	}
+
+	// Test handlePing with zero timestamp
+	pingParams.Timestamp = 0
+	result, err = server.handlePing(ctx, pingParams)
+	if err != nil {
+		t.Errorf("Expected handlePing with zero timestamp to succeed, got error: %v", err)
+	}
+	pingResult, ok = result.(*protocol.PingResult)
+	if !ok {
+		t.Errorf("Expected *protocol.PingResult, got %T", result)
+	} else if pingResult.Timestamp == 0 {
+		t.Error("Expected non-zero timestamp when input timestamp is 0")
+	}
+
+	// Test handleSetLogLevel
+	logLevelParams := &protocol.SetLogLevelParams{
+		Level: protocol.LogLevelDebug,
+	}
+	_, err = server.handleSetLogLevel(ctx, logLevelParams)
+	if err != nil {
+		t.Errorf("Expected handleSetLogLevel to succeed, got error: %v", err)
+	}
+
+	// Test handleSetLogLevel without logging capability
+	serverNoLogging := New(mt) // No logging capability
+	_, err = serverNoLogging.handleSetLogLevel(ctx, logLevelParams)
+	if err == nil {
+		t.Error("Expected handleSetLogLevel to fail without logging capability")
+	}
+}
+
+// Test resource subscription
+func TestServerResourceSubscription(t *testing.T) {
+	mt := newMockTransport()
+	resourcesProvider := &mockServerResourcesProvider{}
+	server := New(mt,
+		WithResourcesProvider(resourcesProvider),
+		WithCapability(protocol.CapabilityResourceSubscriptions, true),
+	)
+
+	ctx := context.Background()
+
+	// Test handleSubscribeResource
+	subParams := &protocol.SubscribeResourceParams{
+		URI:       "test://resource",
+		Recursive: true,
+	}
+	result, err := server.handleSubscribeResource(ctx, subParams)
+	if err != nil {
+		t.Errorf("Expected handleSubscribeResource to succeed, got error: %v", err)
+	}
+	subResult, ok := result.(*protocol.SubscribeResourceResult)
+	if !ok {
+		t.Errorf("Expected *protocol.SubscribeResourceResult, got %T", result)
+	} else if !subResult.Success {
+		t.Error("Expected SubscribeResource to return success true")
+	}
+
+	// Test handleSubscribeResource without subscription capability
+	serverNoSub := New(mt, WithResourcesProvider(resourcesProvider))
+	_, err = serverNoSub.handleSubscribeResource(ctx, subParams)
+	if err == nil {
+		t.Error("Expected handleSubscribeResource to fail without subscription capability")
+	}
+}
+
+// Test missing provider methods
+func TestBaseProviderMethods(t *testing.T) {
+	// Test BaseResourcesProvider ReadResource and SubscribeResource
+	resourcesProvider := NewBaseResourcesProvider()
+
+	ctx := context.Background()
+
+	// Test ReadResource
+	contents, err := resourcesProvider.ReadResource(ctx, "test://resource", nil, nil)
+	if err != nil {
+		t.Errorf("Expected ReadResource to succeed, got error: %v", err)
+	}
+	if contents.URI != "test://resource" {
+		t.Errorf("Expected URI to be 'test://resource', got %q", contents.URI)
+	}
+
+	// Test SubscribeResource
+	success, err := resourcesProvider.SubscribeResource(ctx, "test://resource", true)
+	if err != nil {
+		t.Errorf("Expected SubscribeResource to succeed, got error: %v", err)
+	}
+	if !success {
+		t.Error("Expected SubscribeResource to return true")
+	}
+
+	// Test BaseRootsProvider
+	rootsProvider := NewBaseRootsProvider()
+
+	// Test RegisterRoot
+	root := protocol.Root{
+		ID:   "root1",
+		Name: "Test Root",
+		Tags: []string{"test"},
+	}
+	rootsProvider.RegisterRoot(root)
+
+	// Test ListRoots
+	pagination := &protocol.PaginationParams{Limit: 10}
+	roots, total, cursor, hasMore, err := rootsProvider.ListRoots(ctx, "", pagination)
+	if err != nil {
+		t.Errorf("Expected ListRoots to succeed, got error: %v", err)
+	}
+	if len(roots) != 1 {
+		t.Errorf("Expected 1 root, got %d", len(roots))
+	}
+	if total != 1 {
+		t.Errorf("Expected total 1, got %d", total)
+	}
+	if hasMore {
+		t.Error("Expected hasMore to be false")
+	}
+	if cursor != "" {
+		t.Errorf("Expected empty cursor, got %q", cursor)
+	}
+	if roots[0].ID != "root1" {
+		t.Errorf("Expected root ID 'root1', got %q", roots[0].ID)
+	}
+
+	// Test ListRoots with tag filter
+	roots, _, _, _, err = rootsProvider.ListRoots(ctx, "test", pagination)
+	if err != nil {
+		t.Errorf("Expected ListRoots with tag to succeed, got error: %v", err)
+	}
+	if len(roots) != 1 {
+		t.Errorf("Expected 1 root with tag 'test', got %d", len(roots))
+	}
+
+	// Test ListRoots with non-matching tag
+	roots, _, _, _, err = rootsProvider.ListRoots(ctx, "nonexistent", pagination)
+	if err != nil {
+		t.Errorf("Expected ListRoots with nonexistent tag to succeed, got error: %v", err)
+	}
+	if len(roots) != 0 {
+		t.Errorf("Expected 0 roots with tag 'nonexistent', got %d", len(roots))
+	}
+}
+
+// Test utility functions with missing coverage
+func TestUtilityFunctions(t *testing.T) {
+	// Test hasPrefix function (used in providers.go)
+	if !hasPrefix("test/path", "test") {
+		t.Error("Expected hasPrefix to return true for 'test/path' with prefix 'test'")
+	}
+
+	if hasPrefix("test", "test/path") {
+		t.Error("Expected hasPrefix to return false for 'test' with prefix 'test/path'")
+	}
+
+	if hasPrefix("test", "other") {
+		t.Error("Expected hasPrefix to return false for 'test' with prefix 'other'")
+	}
+
+	// Test errNotFound
+	err := errNotFound("resource", "test-id")
+	if err == nil {
+		t.Fatal("Expected errNotFound to return an error")
+	}
+
+	expectedMsg := "resource not found: test-id"
+	if err.Error() != expectedMsg {
+		t.Errorf("Expected error message %q, got %q", expectedMsg, err.Error())
+	}
+}
+
+// Test handleInitialized method
+func TestHandleInitialized(t *testing.T) {
+	mt := newMockTransport()
+	server := New(mt)
+
+	ctx := context.Background()
+
+	// Test handleInitialized
+	err := server.handleInitialized(ctx, &protocol.InitializedParams{})
+	if err != nil {
+		t.Errorf("Expected handleInitialized to succeed, got error: %v", err)
+	}
+
+	// Server should be marked as initialized
+	if !server.isInitialized() {
+		t.Error("Expected server to be marked as initialized")
+	}
+}
+
+// Test error handling in parseParams
+func TestParseParamsErrorHandling(t *testing.T) {
+	// Test with invalid JSON that can't be marshaled back
+	type invalidStruct struct {
+		InvalidFunc func() // functions can't be marshaled to JSON
+	}
+
+	invalid := invalidStruct{InvalidFunc: func() {}}
+	var target struct{}
+
+	err := parseParams(invalid, &target)
+	if err == nil {
+		t.Error("Expected parseParams to fail with unmarshalable input")
+	}
+}
+
+// Test SendLog with marshaling error
+func TestSendLogMarshalError(t *testing.T) {
+	mt := newMockTransport()
+	server := New(mt)
+
+	// Initialize server
+	server.initializedLock.Lock()
+	server.initialized = true
+	server.initializedLock.Unlock()
+
+	// Create data that can't be marshaled
+	invalidData := make(chan int) // channels can't be marshaled
+
+	err := server.SendLog(protocol.LogLevelInfo, "Test", "test", invalidData)
+	if err == nil {
+		t.Error("Expected SendLog to fail with unmarshalable data")
+	}
+
+	if !strings.Contains(err.Error(), "failed to marshal log data") {
+		t.Errorf("Expected error to mention marshaling failure, got: %v", err)
 	}
 }

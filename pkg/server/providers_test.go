@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/ajitpratap0/mcp-sdk-go/pkg/protocol"
@@ -65,8 +67,18 @@ func TestBaseToolsProvider(t *testing.T) {
 	}
 
 	// Test with cursor pagination
+	// First get a valid cursor
+	firstPage := &protocol.PaginationParams{
+		Limit: 1,
+	}
+	_, _, validCursor, _, err := provider.ListTools(ctx, "", firstPage)
+	if err != nil {
+		t.Fatalf("Failed to get first page for cursor: %v", err)
+	}
+
+	// Now use the valid cursor for next page
 	paginationWithCursor := &protocol.PaginationParams{
-		Cursor: "cursor",
+		Cursor: validCursor,
 		Limit:  1,
 	}
 	results, _, _, _, err = provider.ListTools(ctx, "", paginationWithCursor)
@@ -310,5 +322,210 @@ func TestBasePromptsProvider(t *testing.T) {
 	_, err = provider.GetPrompt(ctx, "nonexistent")
 	if err == nil {
 		t.Fatal("Expected GetPrompt with nonexistent ID to fail")
+	}
+}
+
+func TestPaginationCursor(t *testing.T) {
+	tests := []struct {
+		name   string
+		offset int
+	}{
+		{"zero offset", 0},
+		{"small offset", 10},
+		{"large offset", 1000},
+		{"very large offset", 999999},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Test encoding
+			cursor := encodeCursor(tt.offset)
+			if cursor == "" {
+				t.Error("Expected non-empty cursor")
+			}
+
+			// Test decoding
+			decoded, err := decodeCursor(cursor)
+			if err != nil {
+				t.Fatalf("Failed to decode cursor: %v", err)
+			}
+
+			if decoded != tt.offset {
+				t.Errorf("Expected decoded offset %d, got %d", tt.offset, decoded)
+			}
+		})
+	}
+
+	// Test empty cursor
+	offset, err := decodeCursor("")
+	if err != nil {
+		t.Fatalf("Failed to decode empty cursor: %v", err)
+	}
+	if offset != 0 {
+		t.Errorf("Expected empty cursor to decode to 0, got %d", offset)
+	}
+
+	// Test invalid cursors
+	invalidCursors := []string{
+		"invalid",
+		"cursor_10", // Old format
+		"!!!",
+		base64.StdEncoding.EncodeToString([]byte("invalid json")),
+	}
+
+	for _, cursor := range invalidCursors {
+		_, err := decodeCursor(cursor)
+		if err == nil {
+			t.Errorf("Expected error for invalid cursor %s", cursor)
+		}
+	}
+}
+
+func TestToolsPagination(t *testing.T) {
+	provider := NewBaseToolsProvider()
+
+	// Register multiple tools
+	for i := 0; i < 25; i++ {
+		tool := protocol.Tool{
+			Name:        fmt.Sprintf("tool%d", i),
+			Description: fmt.Sprintf("Test tool %d", i),
+			InputSchema: json.RawMessage(`{"type": "object"}`),
+		}
+		provider.RegisterTool(tool)
+	}
+
+	ctx := context.Background()
+
+	// Test first page
+	page1 := &protocol.PaginationParams{Limit: 10}
+	tools1, total1, cursor1, hasMore1, err := provider.ListTools(ctx, "", page1)
+	if err != nil {
+		t.Fatalf("Failed to get first page: %v", err)
+	}
+
+	if len(tools1) != 10 {
+		t.Errorf("Expected 10 tools on first page, got %d", len(tools1))
+	}
+	if total1 != 25 {
+		t.Errorf("Expected total 25, got %d", total1)
+	}
+	if !hasMore1 {
+		t.Error("Expected hasMore to be true for first page")
+	}
+	if cursor1 == "" {
+		t.Error("Expected non-empty cursor for first page")
+	}
+
+	// Test second page
+	page2 := &protocol.PaginationParams{Limit: 10, Cursor: cursor1}
+	tools2, total2, cursor2, hasMore2, err := provider.ListTools(ctx, "", page2)
+	if err != nil {
+		t.Fatalf("Failed to get second page: %v", err)
+	}
+
+	if len(tools2) != 10 {
+		t.Errorf("Expected 10 tools on second page, got %d", len(tools2))
+	}
+	if total2 != 25 {
+		t.Errorf("Expected total 25, got %d", total2)
+	}
+	if !hasMore2 {
+		t.Error("Expected hasMore to be true for second page")
+	}
+	if cursor2 == "" {
+		t.Error("Expected non-empty cursor for second page")
+	}
+
+	// Test last page
+	page3 := &protocol.PaginationParams{Limit: 10, Cursor: cursor2}
+	tools3, total3, cursor3, hasMore3, err := provider.ListTools(ctx, "", page3)
+	if err != nil {
+		t.Fatalf("Failed to get third page: %v", err)
+	}
+
+	if len(tools3) != 5 {
+		t.Errorf("Expected 5 tools on last page, got %d", len(tools3))
+	}
+	if total3 != 25 {
+		t.Errorf("Expected total 25, got %d", total3)
+	}
+	if hasMore3 {
+		t.Error("Expected hasMore to be false for last page")
+	}
+	if cursor3 != "" {
+		t.Error("Expected empty cursor for last page")
+	}
+
+	// Test invalid cursor
+	pageInvalid := &protocol.PaginationParams{Limit: 10, Cursor: "invalid_cursor"}
+	_, _, _, _, err = provider.ListTools(ctx, "", pageInvalid)
+	if err == nil {
+		t.Error("Expected error for invalid cursor")
+	}
+}
+
+func TestResourcesPagination(t *testing.T) {
+	provider := NewBaseResourcesProvider()
+
+	// Register multiple resources
+	for i := 0; i < 15; i++ {
+		resource := protocol.Resource{
+			URI:  fmt.Sprintf("resource%d", i),
+			Name: fmt.Sprintf("Resource %d", i),
+		}
+		provider.RegisterResource(resource)
+	}
+
+	// Register multiple templates
+	for i := 0; i < 10; i++ {
+		template := protocol.ResourceTemplate{
+			URI:  fmt.Sprintf("template%d", i),
+			Name: fmt.Sprintf("Template %d", i),
+		}
+		provider.RegisterTemplate(template)
+	}
+
+	ctx := context.Background()
+
+	// Test pagination across resources and templates
+	page1 := &protocol.PaginationParams{Limit: 20}
+	resources1, templates1, total1, cursor1, hasMore1, err := provider.ListResources(ctx, "", false, page1)
+	if err != nil {
+		t.Fatalf("Failed to get first page: %v", err)
+	}
+
+	// Should get 15 resources and 5 templates on first page
+	if len(resources1) != 15 {
+		t.Errorf("Expected 15 resources on first page, got %d", len(resources1))
+	}
+	if len(templates1) != 5 {
+		t.Errorf("Expected 5 templates on first page, got %d", len(templates1))
+	}
+	if total1 != 25 {
+		t.Errorf("Expected total 25, got %d", total1)
+	}
+	if !hasMore1 {
+		t.Error("Expected hasMore to be true")
+	}
+
+	// Test second page
+	page2 := &protocol.PaginationParams{Limit: 20, Cursor: cursor1}
+	resources2, templates2, _, cursor2, hasMore2, err := provider.ListResources(ctx, "", false, page2)
+	if err != nil {
+		t.Fatalf("Failed to get second page: %v", err)
+	}
+
+	// Should get 0 resources and 5 templates on second page
+	if len(resources2) != 0 {
+		t.Errorf("Expected 0 resources on second page, got %d", len(resources2))
+	}
+	if len(templates2) != 5 {
+		t.Errorf("Expected 5 templates on second page, got %d", len(templates2))
+	}
+	if hasMore2 {
+		t.Error("Expected hasMore to be false")
+	}
+	if cursor2 != "" {
+		t.Error("Expected empty cursor for last page")
 	}
 }

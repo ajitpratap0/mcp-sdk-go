@@ -288,11 +288,22 @@ func (h *HTTPHandler) handleStreamingRequest(w http.ResponseWriter, r *http.Requ
 
 	// Process the request asynchronously
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[HTTPHandler] ERROR: Panic in http-async-request: %v", r)
+			}
+		}()
+
 		ctx, cancel := context.WithCancel(r.Context())
 		defer cancel()
 
 		// Set up a goroutine to check if the client has disconnected
 		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[HTTPHandler] ERROR: Panic in http-disconnect-monitor: %v", r)
+				}
+			}()
 			select {
 			case <-r.Context().Done():
 				cancel() // Cancel our context if the request context is done
@@ -517,6 +528,11 @@ func (h *HTTPHandler) handleNotification(ctx context.Context, notif *protocol.No
 
 	// Use SendNotification instead of trying to access handlers directly
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[HTTPHandler] ERROR: Panic in http-notification: %v", r)
+			}
+		}()
 		_ = transport.SendNotification(ctx, notif.Method, notif.Params)
 	}()
 }

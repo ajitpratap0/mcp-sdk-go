@@ -109,3 +109,5 @@ config.local.yml
 # Temporary files
 tmp/
 temp/
+
+MCP_GO_STRATEGIC_ANALYSIS.md

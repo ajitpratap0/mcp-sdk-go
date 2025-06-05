@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 
 	"github.com/ajitpratap0/mcp-sdk-go/pkg/protocol"
 )
@@ -49,6 +51,41 @@ type RootsProvider interface {
 	ListRoots(ctx context.Context, tag string, pagination *protocol.PaginationParams) ([]protocol.Root, int, string, bool, error)
 }
 
+// PaginationCursor represents the state of pagination
+type PaginationCursor struct {
+	Offset int `json:"offset"`
+}
+
+// encodeCursor creates a base64-encoded cursor from an offset
+func encodeCursor(offset int) string {
+	cursor := PaginationCursor{Offset: offset}
+	data, _ := json.Marshal(cursor)
+	return base64.StdEncoding.EncodeToString(data)
+}
+
+// decodeCursor extracts the offset from a base64-encoded cursor
+func decodeCursor(cursorStr string) (int, error) {
+	if cursorStr == "" {
+		return 0, nil
+	}
+
+	data, err := base64.StdEncoding.DecodeString(cursorStr)
+	if err != nil {
+		return 0, fmt.Errorf("invalid cursor format: %w", err)
+	}
+
+	var cursor PaginationCursor
+	if err := json.Unmarshal(data, &cursor); err != nil {
+		return 0, fmt.Errorf("invalid cursor data: %w", err)
+	}
+
+	if cursor.Offset < 0 {
+		return 0, fmt.Errorf("invalid cursor offset: %d", cursor.Offset)
+	}
+
+	return cursor.Offset, nil
+}
+
 // BaseToolsProvider provides a simple implementation of ToolsProvider
 type BaseToolsProvider struct {
 	tools map[string]protocol.Tool
@@ -88,33 +125,44 @@ func (p *BaseToolsProvider) ListTools(ctx context.Context, category string, pagi
 		tools = append(tools, tool)
 	}
 
-	// Simple pagination (in a real implementation, this would be more sophisticated)
+	// Implement proper pagination with cursor support
 	total := len(tools)
-	limit := pagination.Limit
-	if limit <= 0 {
-		limit = 50 // Default limit
+	limit := 50 // Default limit
+	cursor := ""
+
+	if pagination != nil {
+		if pagination.Limit > 0 {
+			limit = pagination.Limit
+		}
+		cursor = pagination.Cursor
 	}
 
-	start := 0
-	// In a real implementation, we would parse pagination.Cursor to get the start index
-	// For now we always start at index 0
+	// Decode the cursor to get the starting offset
+	start, err := decodeCursor(cursor)
+	if err != nil {
+		return nil, 0, "", false, fmt.Errorf("invalid pagination cursor: %w", err)
+	}
 
+	// Calculate the end position
 	end := start + limit
 	if end > total {
 		end = total
 	}
 
+	// Determine if there are more results
 	hasMore := end < total
 	nextCursor := ""
 	if hasMore {
-		nextCursor = "cursor_" + string(rune(end)) // Simple string cursor
+		nextCursor = encodeCursor(end)
 	}
 
+	// Return the requested slice
 	if start < total {
 		return tools[start:end], total, nextCursor, hasMore, nil
 	}
 
-	return []protocol.Tool{}, total, nextCursor, hasMore, nil
+	// If start is beyond the total, return empty slice
+	return []protocol.Tool{}, total, "", false, nil
 }
 
 // CallTool executes a tool and returns the result
@@ -180,33 +228,47 @@ func (p *BaseResourcesProvider) ListResources(ctx context.Context, uri string, r
 		}
 	}
 
-	// Simple pagination (in a real implementation, this would be more sophisticated)
+	// Implement proper pagination with cursor support
 	totalResources := len(resources)
 	totalTemplates := len(templates)
 	total := totalResources + totalTemplates
 
-	limit := pagination.Limit
-	if limit <= 0 {
-		limit = 50 // Default limit
+	limit := 50 // Default limit
+	cursor := ""
+
+	if pagination != nil {
+		if pagination.Limit > 0 {
+			limit = pagination.Limit
+		}
+		cursor = pagination.Cursor
 	}
 
-	start := 0
-	// In a real implementation, we would parse pagination.Cursor to get the start index
-	// For now we always start at index 0
+	// Decode the cursor to get the starting offset
+	start, err := decodeCursor(cursor)
+	if err != nil {
+		return nil, nil, 0, "", false, fmt.Errorf("invalid pagination cursor: %w", err)
+	}
 
 	// Apply pagination to resources first, then templates
 	resStart := start
 	resEnd := min(totalResources, start+limit)
 
-	templStart := max(0, resEnd-start)
+	templStart := max(0, start-totalResources)
 	templEnd := min(totalTemplates, templStart+limit-(resEnd-resStart))
 
-	hasMore := resEnd < totalResources || templEnd < totalTemplates
-	nextCursor := ""
-	if hasMore {
-		nextCursor = "cursor_" + string(rune(resEnd)) + "_" + string(rune(templEnd)) // Simple string cursor
+	// Calculate the actual end position across both resources and templates
+	actualEnd := resEnd + templEnd
+	if resEnd == totalResources && templEnd > 0 {
+		actualEnd = totalResources + templEnd
 	}
 
+	hasMore := actualEnd < total
+	nextCursor := ""
+	if hasMore {
+		nextCursor = encodeCursor(actualEnd)
+	}
+
+	// Slice the results
 	if resStart < totalResources {
 		resources = resources[resStart:resEnd]
 	} else {
@@ -277,29 +339,44 @@ func (p *BasePromptsProvider) ListPrompts(ctx context.Context, tag string, pagin
 		}
 	}
 
-	// Simple pagination (in a real implementation, this would be more sophisticated)
+	// Implement proper pagination with cursor support
 	total := len(prompts)
 	limit := 50 // Default limit
-	start := 0
-	// In a real implementation, we would parse pagination.Cursor to get the start index
-	// For now we always start at index 0
+	cursor := ""
 
+	if pagination != nil {
+		if pagination.Limit > 0 {
+			limit = pagination.Limit
+		}
+		cursor = pagination.Cursor
+	}
+
+	// Decode the cursor to get the starting offset
+	start, err := decodeCursor(cursor)
+	if err != nil {
+		return nil, 0, "", false, fmt.Errorf("invalid pagination cursor: %w", err)
+	}
+
+	// Calculate the end position
 	end := start + limit
 	if end > total {
 		end = total
 	}
 
+	// Determine if there are more results
 	hasMore := end < total
 	nextCursor := ""
 	if hasMore {
-		nextCursor = "cursor_" + string(rune(end)) // Simple string cursor
+		nextCursor = encodeCursor(end)
 	}
 
+	// Return the requested slice
 	if start < total {
 		return prompts[start:end], total, nextCursor, hasMore, nil
 	}
 
-	return []protocol.Prompt{}, total, nextCursor, hasMore, nil
+	// If start is beyond the total, return empty slice
+	return []protocol.Prompt{}, total, "", false, nil
 }
 
 // GetPrompt returns a specific prompt
@@ -349,33 +426,44 @@ func (p *BaseRootsProvider) ListRoots(ctx context.Context, tag string, paginatio
 		}
 	}
 
-	// Simple pagination (in a real implementation, this would be more sophisticated)
+	// Implement proper pagination with cursor support
 	total := len(roots)
-	limit := pagination.Limit
-	if limit <= 0 {
-		limit = 50 // Default limit
+	limit := 50 // Default limit
+	cursor := ""
+
+	if pagination != nil {
+		if pagination.Limit > 0 {
+			limit = pagination.Limit
+		}
+		cursor = pagination.Cursor
 	}
 
-	start := 0
-	// In a real implementation, we would parse pagination.Cursor to get the start index
-	// For now we always start at index 0
+	// Decode the cursor to get the starting offset
+	start, err := decodeCursor(cursor)
+	if err != nil {
+		return nil, 0, "", false, fmt.Errorf("invalid pagination cursor: %w", err)
+	}
 
+	// Calculate the end position
 	end := start + limit
 	if end > total {
 		end = total
 	}
 
+	// Determine if there are more results
 	hasMore := end < total
 	nextCursor := ""
 	if hasMore {
-		nextCursor = "cursor_" + string(rune(end)) // Simple string cursor
+		nextCursor = encodeCursor(end)
 	}
 
+	// Return the requested slice
 	if start < total {
 		return roots[start:end], total, nextCursor, hasMore, nil
 	}
 
-	return []protocol.Root{}, total, nextCursor, hasMore, nil
+	// If start is beyond the total, return empty slice
+	return []protocol.Root{}, total, "", false, nil
 }
 
 // Helper functions

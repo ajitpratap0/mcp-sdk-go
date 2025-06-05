@@ -368,6 +368,13 @@ func (s *Server) isInitialized() bool {
 	return s.initialized
 }
 
+// getClientInfo safely returns the client info
+func (s *Server) getClientInfo() *protocol.ClientInfo {
+	s.initializedLock.RLock()
+	defer s.initializedLock.RUnlock()
+	return s.clientInfo
+}
+
 // Request handlers
 
 func (s *Server) handleInitialize(ctx context.Context, params interface{}) (interface{}, error) {
@@ -378,15 +385,14 @@ func (s *Server) handleInitialize(ctx context.Context, params interface{}) (inte
 
 	s.logger.Info("Initializing connection with client: %s %s", initParams.Name, initParams.Version)
 
+	// Protect all shared state modifications with the lock
+	s.initializedLock.Lock()
 	s.clientInfo = initParams.ClientInfo
+	s.initialized = true
+	s.initializedLock.Unlock()
 
 	// Store client capabilities for future reference
 	// (useful for determining if client supports sampling, etc.)
-
-	// Mark the server as initialized
-	s.initializedLock.Lock()
-	s.initialized = true
-	s.initializedLock.Unlock()
 
 	result := &protocol.InitializeResult{
 		ProtocolVersion: protocol.ProtocolRevision,

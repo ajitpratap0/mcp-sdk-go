@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -98,6 +100,104 @@ func (m *mockTransport) SetErrorHandler(handler transport.ErrorHandler) {
 }
 
 // Custom mock implementations for providers
+
+// TestServerConcurrentInitialize tests that concurrent initialization is safe
+func TestServerConcurrentInitialize(t *testing.T) {
+	transport := newMockTransport()
+	server := New(transport, WithName("test-server"))
+
+	// Create multiple goroutines that try to initialize concurrently
+	const numGoroutines = 100
+	var wg sync.WaitGroup
+	wg.Add(numGoroutines)
+
+	errors := make(chan error, numGoroutines)
+
+	for i := 0; i < numGoroutines; i++ {
+		go func(id int) {
+			defer wg.Done()
+
+			// Create unique client info for each goroutine
+			params := &protocol.InitializeParams{
+				Name:    fmt.Sprintf("client-%d", id),
+				Version: "1.0.0",
+				ClientInfo: &protocol.ClientInfo{
+					Name:    fmt.Sprintf("test-client-%d", id),
+					Version: "1.0.0",
+				},
+			}
+
+			ctx := context.Background()
+			_, err := server.handleInitialize(ctx, params)
+			if err != nil {
+				errors <- err
+			}
+		}(i)
+	}
+
+	wg.Wait()
+	close(errors)
+
+	// Check if any errors occurred
+	for err := range errors {
+		t.Errorf("Unexpected error during concurrent initialization: %v", err)
+	}
+
+	// Verify server is initialized
+	if !server.isInitialized() {
+		t.Error("Server should be initialized after handleInitialize")
+	}
+
+	// Verify clientInfo is set (it should be from one of the goroutines)
+	clientInfo := server.getClientInfo()
+	if clientInfo == nil {
+		t.Error("Client info should be set after initialization")
+	}
+}
+
+// TestServerGetClientInfoSafety tests that getClientInfo is safe to call concurrently
+func TestServerGetClientInfoSafety(t *testing.T) {
+	transport := newMockTransport()
+	server := New(transport, WithName("test-server"))
+
+	// Initialize the server first
+	params := &protocol.InitializeParams{
+		Name:    "test-client",
+		Version: "1.0.0",
+		ClientInfo: &protocol.ClientInfo{
+			Name:    "test-client-info",
+			Version: "1.0.0",
+		},
+	}
+
+	ctx := context.Background()
+	_, err := server.handleInitialize(ctx, params)
+	if err != nil {
+		t.Fatalf("Failed to initialize server: %v", err)
+	}
+
+	// Now test concurrent reads
+	const numReaders = 100
+	var wg sync.WaitGroup
+	wg.Add(numReaders)
+
+	for i := 0; i < numReaders; i++ {
+		go func() {
+			defer wg.Done()
+			info := server.getClientInfo()
+			if info == nil {
+				t.Error("Client info should not be nil")
+				return
+			}
+			if info.Name != "test-client-info" {
+				t.Errorf("Expected client name 'test-client-info', got '%s'", info.Name)
+			}
+		}()
+	}
+
+	wg.Wait()
+}
+
 type mockToolsProvider struct {
 	tools []protocol.Tool
 	err   error

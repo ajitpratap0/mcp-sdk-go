@@ -23,6 +23,7 @@ A professional, high-performance implementation of the [Model Context Protocol (
 - [Project Structure](#project-structure)
 - [Documentation](#documentation)
 - [Contributing](#contributing)
+- [Code of Conduct](#code-of-conduct)
 - [License](#license)
 
 ## Overview
@@ -316,6 +317,10 @@ When reporting a bug, please include:
 - Any relevant logs or error messages
 
 For more detailed information, please read our complete [Contributing Guide](https://github.com/ajitpratap0/mcp-sdk-go/blob/main/CONTRIBUTING.md).
+
+## Code of Conduct
+
+This project adheres to the [Contributor Covenant Code of Conduct](./CODE_OF_CONDUCT.md). By participating, you are expected to uphold this code. Please report unacceptable behavior to the maintainers as outlined in the Code of Conduct.
 
 ## License
 

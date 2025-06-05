@@ -20,7 +20,7 @@ import (
 type HTTPHandler struct {
 	transport       transport.Transport
 	allowedOrigins  []string
-	mu              sync.Mutex
+	mu              sync.RWMutex
 	sessions        map[string]*SessionInfo
 	sessionMu       sync.RWMutex
 	sseConnections  map[string]*SSEConnection
@@ -313,9 +313,9 @@ func (h *HTTPHandler) handleStreamingRequest(w http.ResponseWriter, r *http.Requ
 		}()
 
 		// Try to invoke the handler through the transport's implementation
-		h.mu.Lock()
+		h.mu.RLock()
 		tmp := h.transport
-		h.mu.Unlock()
+		h.mu.RUnlock()
 
 		if tmp == nil {
 			// Error response for no transport
@@ -426,9 +426,9 @@ func (h *HTTPHandler) handleRequest(w http.ResponseWriter, ctx context.Context, 
 		response, err = protocol.NewErrorResponse(req.ID, protocol.InternalError, "Transport not properly configured", nil)
 	} else {
 		// Get a safe reference to the transport
-		h.mu.Lock()
+		h.mu.RLock()
 		tmp := h.transport
-		h.mu.Unlock()
+		h.mu.RUnlock()
 
 		// Try to invoke the handler through the transport's implementation
 		result, handlerErr := tmp.SendRequest(ctx, req.Method, req.Params)
@@ -480,9 +480,9 @@ func (h *HTTPHandler) handleRequestWithSessionID(w http.ResponseWriter, ctx cont
 		response, err = protocol.NewErrorResponse(req.ID, protocol.InternalError, "Transport not properly configured", nil)
 	} else {
 		// Get a safe reference to the transport
-		h.mu.Lock()
+		h.mu.RLock()
 		tmp := h.transport
-		h.mu.Unlock()
+		h.mu.RUnlock()
 
 		// Try to invoke the handler through the transport's implementation
 		result, handlerErr := tmp.SendRequest(ctx, req.Method, req.Params)
@@ -518,9 +518,9 @@ func (h *HTTPHandler) handleRequestWithSessionID(w http.ResponseWriter, ctx cont
 
 // handleNotification processes a JSON-RPC notification (no response)
 func (h *HTTPHandler) handleNotification(ctx context.Context, notif *protocol.Notification) {
-	h.mu.Lock()
+	h.mu.RLock()
 	transport := h.transport
-	h.mu.Unlock()
+	h.mu.RUnlock()
 
 	if transport == nil {
 		return
@@ -703,9 +703,9 @@ func (h *HTTPHandler) isOriginAllowed(origin string) bool {
 		return true
 	}
 
-	h.mu.Lock()
+	h.mu.RLock()
 	origins := h.allowedOrigins
-	h.mu.Unlock()
+	h.mu.RUnlock()
 
 	for _, allowed := range origins {
 		if allowed == "*" || allowed == origin {

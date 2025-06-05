@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	"github.com/ajitpratap0/mcp-sdk-go/pkg/protocol"
 )
@@ -88,6 +89,7 @@ func decodeCursor(cursorStr string) (int, error) {
 
 // BaseToolsProvider provides a simple implementation of ToolsProvider
 type BaseToolsProvider struct {
+	mu    sync.RWMutex
 	tools map[string]protocol.Tool
 }
 
@@ -100,11 +102,16 @@ func NewBaseToolsProvider() *BaseToolsProvider {
 
 // RegisterTool registers a tool
 func (p *BaseToolsProvider) RegisterTool(tool protocol.Tool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.tools[tool.Name] = tool
 }
 
 // ListTools returns all registered tools
 func (p *BaseToolsProvider) ListTools(ctx context.Context, category string, pagination *protocol.PaginationParams) ([]protocol.Tool, int, string, bool, error) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
 	var tools []protocol.Tool
 
 	for _, tool := range p.tools {
@@ -176,6 +183,7 @@ func (p *BaseToolsProvider) CallTool(ctx context.Context, name string, input jso
 
 // BaseResourcesProvider provides a simple implementation of ResourcesProvider
 type BaseResourcesProvider struct {
+	mu          sync.RWMutex
 	resources   map[string]protocol.Resource
 	templates   map[string]protocol.ResourceTemplate
 	subscribers map[string]bool
@@ -192,16 +200,23 @@ func NewBaseResourcesProvider() *BaseResourcesProvider {
 
 // RegisterResource registers a resource
 func (p *BaseResourcesProvider) RegisterResource(resource protocol.Resource) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.resources[resource.URI] = resource
 }
 
 // RegisterTemplate registers a resource template
 func (p *BaseResourcesProvider) RegisterTemplate(template protocol.ResourceTemplate) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.templates[template.URI] = template
 }
 
 // ListResources returns all registered resources
 func (p *BaseResourcesProvider) ListResources(ctx context.Context, uri string, recursive bool, pagination *protocol.PaginationParams) ([]protocol.Resource, []protocol.ResourceTemplate, int, string, bool, error) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
 	var resources []protocol.Resource
 	var templates []protocol.ResourceTemplate
 
@@ -304,6 +319,7 @@ func (p *BaseResourcesProvider) SubscribeResource(ctx context.Context, uri strin
 
 // BasePromptsProvider provides a simple implementation of PromptsProvider
 type BasePromptsProvider struct {
+	mu      sync.RWMutex
 	prompts map[string]protocol.Prompt
 }
 
@@ -316,11 +332,14 @@ func NewBasePromptsProvider() *BasePromptsProvider {
 
 // RegisterPrompt registers a prompt
 func (p *BasePromptsProvider) RegisterPrompt(prompt protocol.Prompt) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.prompts[prompt.ID] = prompt
 }
 
 // ListPrompts returns all registered prompts
 func (p *BasePromptsProvider) ListPrompts(ctx context.Context, tag string, pagination *protocol.PaginationParams) ([]protocol.Prompt, int, string, bool, error) {
+	p.mu.RLock()
 	var prompts []protocol.Prompt
 
 	// Filter prompts by tag if specified
@@ -338,6 +357,7 @@ func (p *BasePromptsProvider) ListPrompts(ctx context.Context, tag string, pagin
 			prompts = append(prompts, prompt)
 		}
 	}
+	p.mu.RUnlock()
 
 	// Implement proper pagination with cursor support
 	total := len(prompts)
@@ -381,6 +401,8 @@ func (p *BasePromptsProvider) ListPrompts(ctx context.Context, tag string, pagin
 
 // GetPrompt returns a specific prompt
 func (p *BasePromptsProvider) GetPrompt(ctx context.Context, id string) (*protocol.Prompt, error) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	prompt, ok := p.prompts[id]
 	if !ok {
 		return nil, errNotFound("prompt", id)
@@ -391,6 +413,7 @@ func (p *BasePromptsProvider) GetPrompt(ctx context.Context, id string) (*protoc
 
 // BaseRootsProvider provides a simple implementation of RootsProvider
 type BaseRootsProvider struct {
+	mu    sync.RWMutex
 	roots map[string]protocol.Root
 }
 
@@ -403,11 +426,14 @@ func NewBaseRootsProvider() *BaseRootsProvider {
 
 // RegisterRoot registers a root
 func (p *BaseRootsProvider) RegisterRoot(root protocol.Root) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.roots[root.ID] = root
 }
 
 // ListRoots returns all registered roots
 func (p *BaseRootsProvider) ListRoots(ctx context.Context, tag string, pagination *protocol.PaginationParams) ([]protocol.Root, int, string, bool, error) {
+	p.mu.RLock()
 	var roots []protocol.Root
 
 	// Filter roots by tag if specified
@@ -425,6 +451,7 @@ func (p *BaseRootsProvider) ListRoots(ctx context.Context, tag string, paginatio
 			roots = append(roots, root)
 		}
 	}
+	p.mu.RUnlock()
 
 	// Implement proper pagination with cursor support
 	total := len(roots)

@@ -109,16 +109,18 @@ Tasks are organized into:
   - [ ] Debug remaining test timeouts
 
 #### Concurrency & Race Conditions
-- [ ] **Fix Server Concurrency Issues**
-  - [ ] Audit all server mutex usage
-  - [ ] Fix clientInfo race condition
-  - [ ] Add read/write locks where appropriate
+- [x] **Fix Server Concurrency Issues** ✅ COMPLETED
+  - [x] Audit all server mutex usage
+  - [x] Fix base provider race conditions (BaseToolsProvider, BaseResourcesProvider, BasePromptsProvider, BaseRootsProvider)
+  - [x] Add read/write locks where appropriate (HTTPHandler and all base providers)
+  - [x] Create comprehensive race condition tests
   - [ ] Implement request ID tracking for deduplication
 
-- [ ] **Fix StreamableHTTP Race Conditions**
-  - [ ] Audit mutex usage in `processEventSource`
-  - [ ] Fix concurrent map access in `eventSources`
-  - [ ] Ensure proper cleanup on context cancellation
+- [x] **Fix StreamableHTTP Race Conditions** ✅ COMPLETED
+  - [x] Fix processEventSource goroutine management with channel-based synchronization
+  - [x] Fix concurrent field access (LastEventID, headers, etc.) with proper mutex protection
+  - [x] Ensure proper cleanup on context cancellation with improved Close() method
+  - [x] Fix HandleResponse to properly clean up handlers and check pending requests
   - [ ] Add race detector to CI pipeline
 
 - [ ] **Goroutine Management**

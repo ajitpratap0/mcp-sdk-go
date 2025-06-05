@@ -407,15 +407,19 @@ func (t *StreamableHTTPTransport) sendHTTPRequest(ctx context.Context, message i
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
 
-	// Copy all custom headers
+	// Copy headers with proper locking
 	t.mu.Lock()
+	headersCopy := make(map[string]string, len(t.headers))
 	for k, v := range t.headers {
-		req.Header.Set(k, v)
+		headersCopy[k] = v
 	}
-
-	// Add session ID if available
 	sessionID := t.sessionID
 	t.mu.Unlock()
+
+	// Apply headers outside the lock
+	for k, v := range headersCopy {
+		req.Header.Set(k, v)
+	}
 
 	if sessionID != "" {
 		t.logger.Printf("[DEBUG] Adding session ID to request: %s\n", sessionID)
@@ -544,22 +548,20 @@ func (t *StreamableHTTPTransport) sendHTTPRequest(ctx context.Context, message i
 // processEventSource processes messages from an event source
 func (t *StreamableHTTPTransport) processEventSource(ctx context.Context, es *StreamableEventSource) {
 	t.logger.Printf("processEventSource: Starting for stream %s", es.StreamID)
-	var eventReadingWG sync.WaitGroup
 
 	defer func() {
-		t.logger.Printf("processEventSource: Exiting for stream %s. Waiting for event reading goroutine to finish...", es.StreamID)
-		eventReadingWG.Wait() // Wait for the event reading goroutine to finish before fully exiting
-		t.logger.Printf("processEventSource: Event reading goroutine finished for stream %s.", es.StreamID)
-		if es != nil {
-			es.Close() // Ensure event source's underlying connection (Body) is closed
-			t.logger.Printf("processEventSource: Closed event source for stream %s in defer.", es.StreamID)
-		}
+		t.logger.Printf("processEventSource: Exiting for stream %s", es.StreamID)
+		es.Close()
 		// If this event source was associated with a request, remove it from active event sources
 		if strings.HasPrefix(es.StreamID, "request-") {
 			t.eventSources.Delete(es.StreamID)
 			t.logger.Printf("processEventSource: Deleted event source %s from active map.", es.StreamID)
 		}
 	}()
+
+	// Exponential backoff for reconnection attempts
+	backoff := time.Second
+	maxBackoff := 30 * time.Second
 
 	for {
 		select {
@@ -569,90 +571,105 @@ func (t *StreamableHTTPTransport) processEventSource(ctx context.Context, es *St
 		default:
 		}
 
-		// Create a new context for this connection attempt, derived from the parent context
-		// This allows us to cancel this specific connection attempt if needed (e.g., for retry)
+		// Create a new context for this connection attempt
 		esConnectionCtx, esConnectionCancel := context.WithCancel(ctx)
+		readEventsDone := make(chan struct{})
 
-		eventReadingWG.Add(1)
+		// Start the event reading goroutine
 		go func() {
-			defer eventReadingWG.Done()
-			defer esConnectionCancel() // Crucially, cancel the connection-specific context when this goroutine exits
+			defer close(readEventsDone)
+			defer esConnectionCancel()
 			t.logger.Printf("processEventSource: Starting event reading goroutine for stream %s", es.StreamID)
-			es.readEvents(esConnectionCtx) // Pass the connection-specific context
+			es.readEvents(esConnectionCtx)
 			t.logger.Printf("processEventSource: Event reading goroutine finished for stream %s", es.StreamID)
 		}()
 
-		keepProcessingThisSource := true
-		for keepProcessingThisSource {
+		// Process messages until connection fails
+		keepProcessing := true
+		for keepProcessing {
 			select {
-			case <-ctx.Done(): // Parent context cancelled
+			case <-ctx.Done():
 				t.logger.Printf("processEventSource: Parent context done during message processing for stream %s: %v", es.StreamID, ctx.Err())
-				esConnectionCancel() // Signal the event reading goroutine to stop
-				return               // Exit processEventSource
+				esConnectionCancel()
+				<-readEventsDone // Wait for readEvents to complete
+				return
 
-			case <-esConnectionCtx.Done(): // Current connection attempt's context cancelled (e.g. readEvents finished or error)
+			case <-esConnectionCtx.Done():
 				t.logger.Printf("processEventSource: Connection context done for stream %s: %v. Will attempt reconnect if appropriate.", es.StreamID, esConnectionCtx.Err())
-				keepProcessingThisSource = false // Break inner loop to retry connection
+				keepProcessing = false
 
 			case msg, ok := <-es.MessageChan:
 				if !ok {
 					t.logger.Printf("processEventSource: MessageChan closed for stream %s. Connection likely lost.", es.StreamID)
-					esConnectionCancel()             // Ensure event reading goroutine is stopped
-					keepProcessingThisSource = false // Break inner loop to retry connection
+					esConnectionCancel()
+					keepProcessing = false
 					continue
 				}
 				t.logger.Printf("processEventSource: Received message on stream %s: %s", es.StreamID, string(msg))
 				if err := t.handleMessage(ctx, msg); err != nil {
 					t.logger.Printf("Error handling message on stream %s: %v", es.StreamID, err)
-					// Depending on error type, might decide to stop or continue
 				}
 
 			case err, ok := <-es.ErrorChan:
-				if !ok {
-					t.logger.Printf("processEventSource: ErrorChan closed for stream %s.", es.StreamID)
-					esConnectionCancel()             // Ensure event reading goroutine is stopped
-					keepProcessingThisSource = false // Break inner loop to retry connection
-					continue
+				if !ok || err != nil {
+					t.logger.Printf("processEventSource: Error on stream %s: %v", es.StreamID, err)
+					esConnectionCancel()
+					keepProcessing = false
 				}
-				t.logger.Printf("processEventSource: Received error on stream %s: %v. Will attempt reconnect.", es.StreamID, err)
-				esConnectionCancel()             // Ensure event reading goroutine is stopped
-				keepProcessingThisSource = false // Break inner loop to retry connection
 			}
 		}
 
-		// Before retrying, wait for the current event reading goroutine to complete fully.
-		t.logger.Printf("processEventSource: Waiting for active event reader to finish before potential retry for stream %s...", es.StreamID)
-		eventReadingWG.Wait()
-		t.logger.Printf("processEventSource: Active event reader finished for stream %s.", es.StreamID)
+		// Wait for readEvents to complete before potentially reconnecting
+		<-readEventsDone
 
-		// If the parent context is done, don't attempt to reconnect.
+		// Check if we should reconnect
 		if ctx.Err() != nil {
 			t.logger.Printf("processEventSource: Parent context done, not retrying connection for stream %s.", es.StreamID)
 			return
 		}
 
+		// Get LastEventID safely
+		es.mu.Lock()
+		lastEventID := es.LastEventID
+		streamID := es.StreamID
+		es.mu.Unlock()
+
 		// Reconnect logic
-		t.logger.Printf("processEventSource: Attempting to reconnect stream %s with LastEventID: %s", es.StreamID, es.LastEventID)
-		var err error
-		var newEs *StreamableEventSource // Placeholder for re-establishing or reusing 'es'
-		// In a real scenario, you'd try to create a new connection for 'es'
-		// For simplicity in this example, we'll just simulate a delay and potentially re-use 'es' if the design allows.
-		// If 'es' internally handles reconnection, then this part changes.
+		t.logger.Printf("processEventSource: Attempting to reconnect stream %s with LastEventID: %s", streamID, lastEventID)
+
+		// Check transport state
+		if !t.running.Load() {
+			t.logger.Printf("processEventSource: Transport not running, stopping reconnection for stream %s", streamID)
+			return
+		}
+
+		// For request-specific streams, check if the response handler still exists
+		if strings.HasPrefix(streamID, "request-") {
+			t.mu.Lock()
+			_, hasHandler := t.responseHandlers[streamID]
+			t.mu.Unlock()
+			if !hasHandler {
+				t.logger.Printf("processEventSource: No response handler for stream %s, stopping reconnection", streamID)
+				return
+			}
+		}
 
 		// This is where createEventSource or a similar mechanism would be called again.
 		// For the main listener, it should try indefinitely. For request streams, it might depend on request context.
+		var newEs *StreamableEventSource
+		var err error
+
 		if es.StreamID == "listener" {
 			t.logger.Printf("processEventSource: Reconnecting listener stream %s", es.StreamID)
-			newEs, err = t.createEventSource(es.StreamID, es.LastEventID, ctx) // Pass parent ctx
+			newEs, err = t.createEventSource(es.StreamID, lastEventID, ctx)
 		} else if strings.HasPrefix(es.StreamID, "request-") {
 			// For request-specific streams, their lifecycle is tied to the request's context.
-			// If the request context (which should be `ctx` here) is done, no need to reconnect.
 			if ctx.Err() != nil {
 				t.logger.Printf("processEventSource: Request context done for stream %s, not reconnecting.", es.StreamID)
 				return
 			}
 			t.logger.Printf("processEventSource: Reconnecting request stream %s", es.StreamID)
-			newEs, err = t.createEventSource(es.StreamID, es.LastEventID, ctx) // Pass parent (request) ctx
+			newEs, err = t.createEventSource(es.StreamID, lastEventID, ctx)
 		} else {
 			t.logger.Printf("processEventSource: Unknown stream type %s, not attempting reconnect.", es.StreamID)
 			return
@@ -661,22 +678,32 @@ func (t *StreamableHTTPTransport) processEventSource(ctx context.Context, es *St
 		if err != nil {
 			t.logger.Printf("processEventSource: Failed to recreate event source for stream %s: %v. Retrying after delay.", es.StreamID, err)
 			select {
-			case <-time.After(5 * time.Second): // Backoff before retrying
+			case <-time.After(backoff):
+				// Update backoff for next attempt
+				backoff = backoff * 2
+				if backoff > maxBackoff {
+					backoff = maxBackoff
+				}
 			case <-ctx.Done():
 				t.logger.Printf("processEventSource: Parent context done during reconnect backoff for stream %s.", es.StreamID)
 				return
 			}
-			continue // Retry the outer loop (which will attempt to create and process a new connection)
+			continue
 		}
-		// Selectively update fields instead of copying the entire struct with mutex
+
+		// Safely update fields with mutex protection
+		es.mu.Lock()
 		es.URL = newEs.URL
 		es.Headers = newEs.Headers
 		es.Client = newEs.Client
 		es.Connection = newEs.Connection
 		es.LastEventID = newEs.LastEventID
 		es.StreamID = newEs.StreamID
-		// Note: we don't copy mutex (es.mu) or channels which should be preserved
+		es.mu.Unlock()
+
 		t.logger.Printf("processEventSource: Successfully re-established event source for stream %s.", es.StreamID)
+		// Reset backoff on successful reconnection
+		backoff = time.Second
 		// Loop continues, a new esConnectionCtx will be created, and readEvents will be launched for the new 'es'
 	}
 }
@@ -747,20 +774,46 @@ func (t *StreamableHTTPTransport) HandleResponse(resp *protocol.Response) {
 	// Convert response ID to string for consistent map lookup
 	stringID := fmt.Sprintf("%v", resp.ID)
 
+	// Try custom handlers first
 	t.mu.Lock()
-	handler, ok := t.responseHandlers[stringID]
+	handler, hasCustomHandler := t.responseHandlers[stringID]
 	handlersCount := len(t.responseHandlers)
 	t.mu.Unlock()
 
-	t.logger.Printf("[DEBUG] HandleResponse: Received response for ID '%s'. Response handlers: %d. Handler found: %t", stringID, handlersCount, ok)
-
-	if ok && handler != nil {
+	if hasCustomHandler && handler != nil {
+		t.logger.Printf("[DEBUG] HandleResponse: Using custom handler for response ID %s (total handlers: %d)", stringID, handlersCount)
 		handler(resp)
-		t.logger.Printf("[DEBUG] HandleResponse: Successfully processed response for ID '%s'.", stringID)
-	} else {
-		// Fall back to BaseTransport's handler for backward compatibility
-		t.BaseTransport.HandleResponse(resp)
+
+		// Clean up the handler after use
+		t.mu.Lock()
+		delete(t.responseHandlers, stringID)
+		t.mu.Unlock()
+		return
 	}
+
+	// Check pending requests channel
+	t.mu.Lock()
+	respChan, hasPending := t.pendingRequests[stringID]
+	t.mu.Unlock()
+
+	if hasPending && respChan != nil {
+		select {
+		case respChan <- resp:
+			t.logger.Printf("[DEBUG] HandleResponse: Sent response to pending channel for ID %s", stringID)
+		case <-time.After(5 * time.Second):
+			t.logger.Printf("[DEBUG] HandleResponse: Timeout sending response to channel for ID %s", stringID)
+		}
+
+		// Clean up
+		t.mu.Lock()
+		delete(t.pendingRequests, stringID)
+		t.mu.Unlock()
+		return
+	}
+
+	// Fall back to BaseTransport's handler
+	t.logger.Printf("[DEBUG] HandleResponse: No custom handler or pending request for ID %s, using BaseTransport", stringID)
+	t.BaseTransport.HandleResponse(resp)
 }
 
 // handleMessage processes an incoming JSON-RPC message, which could be a single message or batch
@@ -932,16 +985,14 @@ func (es *StreamableEventSource) Connect() error {
 
 // Close terminates the SSE connection
 func (es *StreamableEventSource) Close() {
-	es.mu.Lock()
-	defer es.mu.Unlock()
-
-	if !es.isConnected.Load() {
+	// Ensure we only close once using atomic operation
+	if !es.isConnected.CompareAndSwap(true, false) {
 		fmt.Printf("[DEBUG] EventSource %s already closed\n", es.StreamID)
-		return // Already closed
+		return
 	}
 
-	// Set the flag first to prevent concurrent access issues
-	es.isConnected.Store(false)
+	es.mu.Lock()
+	defer es.mu.Unlock()
 
 	// Safely close the connection body if it exists
 	if es.Connection != nil && es.Connection.Body != nil {
@@ -1094,7 +1145,9 @@ func (es *StreamableEventSource) readEvents(ctx context.Context) {
 			if eventData != "" {
 				// If we have an ID, update the last event ID
 				if eventID != "" {
+					es.mu.Lock()
 					es.LastEventID = eventID
+					es.mu.Unlock()
 					fmt.Printf("[DEBUG] Updated LastEventID to %s for stream %s\n", eventID, es.StreamID)
 				}
 

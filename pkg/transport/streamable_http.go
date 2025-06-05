@@ -742,6 +742,27 @@ func (t *StreamableHTTPTransport) handleBatchMessage(ctx context.Context, data [
 	return nil
 }
 
+// HandleResponse overrides BaseTransport's HandleResponse to use StreamableHTTPTransport's own response handlers
+func (t *StreamableHTTPTransport) HandleResponse(resp *protocol.Response) {
+	// Convert response ID to string for consistent map lookup
+	stringID := fmt.Sprintf("%v", resp.ID)
+
+	t.mu.Lock()
+	handler, ok := t.responseHandlers[stringID]
+	handlersCount := len(t.responseHandlers)
+	t.mu.Unlock()
+
+	t.logger.Printf("[DEBUG] HandleResponse: Received response for ID '%s'. Response handlers: %d. Handler found: %t", stringID, handlersCount, ok)
+
+	if ok && handler != nil {
+		handler(resp)
+		t.logger.Printf("[DEBUG] HandleResponse: Successfully processed response for ID '%s'.", stringID)
+	} else {
+		// Fall back to BaseTransport's handler for backward compatibility
+		t.BaseTransport.HandleResponse(resp)
+	}
+}
+
 // handleMessage processes an incoming JSON-RPC message, which could be a single message or batch
 func (t *StreamableHTTPTransport) handleMessage(ctx context.Context, data []byte) error {
 	// Check for empty or whitespace-only messages

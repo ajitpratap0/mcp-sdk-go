@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -147,14 +148,29 @@ func (t *HTTPTransport) Start(ctx context.Context) error {
 			return ctx.Err()
 
 		case err := <-t.eventSource.ErrorChan:
+			// Check if we should still be running
+			if !t.running.Load() {
+				return nil
+			}
+
 			// Log the error
 			fmt.Printf("EventSource error: %v. Attempting to reconnect...\n", err)
 
 			// Try to reconnect on error
 			t.eventSource.Close()
 
-			// Introduce a delay before reconnecting
-			time.Sleep(5 * time.Second)
+			// Introduce a delay before reconnecting with context check
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(5 * time.Second):
+				// Continue with reconnection
+			}
+
+			// Check again if we should still be running after the delay
+			if !t.running.Load() {
+				return nil
+			}
 
 			if reconnectErr := t.eventSource.Connect(); reconnectErr != nil {
 				return fmt.Errorf("failed to reconnect after error %v: %w", err, reconnectErr)
@@ -172,6 +188,7 @@ func (t *HTTPTransport) Start(ctx context.Context) error {
 
 // Stop gracefully shuts down the transport
 func (t *HTTPTransport) Stop(ctx context.Context) error {
+	t.running.Store(false)
 	if t.eventSource != nil {
 		t.eventSource.Close()
 	}
@@ -279,6 +296,15 @@ func (es *EventSource) Connect() error {
 		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
+	// Check content type
+	contentType := resp.Header.Get("Content-Type")
+	if !strings.HasPrefix(contentType, "text/event-stream") {
+		if err := resp.Body.Close(); err != nil {
+			return fmt.Errorf("error closing response body: %w", err)
+		}
+		return fmt.Errorf("expected content-type 'text/event-stream', got '%s'", contentType)
+	}
+
 	es.Connection = resp
 	es.isConnected.Store(true)
 
@@ -297,8 +323,13 @@ func (es *EventSource) Close() {
 		return
 	}
 
-	// Signal close to readEvents goroutine
-	close(es.CloseChan)
+	// Signal close to readEvents goroutine - protect against double close
+	select {
+	case <-es.CloseChan:
+		// Already closed
+	default:
+		close(es.CloseChan)
+	}
 
 	// Close the connection
 	if es.Connection != nil && es.Connection.Body != nil {

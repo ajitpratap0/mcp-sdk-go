@@ -42,6 +42,9 @@ type Server struct {
 	activeRequests     map[string]context.CancelFunc
 	activeRequestsLock sync.RWMutex
 
+	// Resource subscription manager
+	subscriptionManager *ResourceSubscriptionManager
+
 	// Logger
 	logger Logger
 }
@@ -148,6 +151,13 @@ func WithResourcesProvider(provider ResourcesProvider) ServerOption {
 	}
 }
 
+// WithResourceSubscriptions enables resource subscription support
+func WithResourceSubscriptions() ServerOption {
+	return func(s *Server) {
+		s.capabilities[string(protocol.CapabilityResourceSubscriptions)] = true
+	}
+}
+
 // WithPromptsProvider sets the prompts provider
 func WithPromptsProvider(provider PromptsProvider) ServerOption {
 	return func(s *Server) {
@@ -208,6 +218,15 @@ func New(t transport.Transport, options ...ServerOption) *Server {
 		option(server)
 	}
 
+	// Create subscription manager if resources are enabled
+	if server.capabilities[string(protocol.CapabilityResources)] && server.capabilities[string(protocol.CapabilityResourceSubscriptions)] {
+		server.subscriptionManager = NewResourceSubscriptionManager(server, server.logger)
+		// Wrap the resources provider with subscription support
+		if server.resourcesProvider != nil {
+			server.resourcesProvider = NewSubscribableResourcesProvider(server.resourcesProvider, server.subscriptionManager)
+		}
+	}
+
 	// Register request handlers
 	t.RegisterRequestHandler(protocol.MethodInitialize, server.handleInitialize)
 	t.RegisterNotificationHandler(protocol.MethodInitialized, server.handleInitialized)
@@ -262,6 +281,11 @@ func (s *Server) Start(ctx context.Context) error {
 
 	s.logger.Info("Server starting with capabilities: %v", s.capabilities)
 
+	// Start subscription manager if enabled
+	if s.subscriptionManager != nil {
+		s.subscriptionManager.Start(ctx)
+	}
+
 	// Start transport (blocking)
 	return s.transport.Start(ctx)
 }
@@ -269,6 +293,11 @@ func (s *Server) Start(ctx context.Context) error {
 // Stop gracefully shuts down the server
 func (s *Server) Stop() error {
 	s.cancel()
+
+	// Stop subscription manager if enabled
+	if s.subscriptionManager != nil {
+		s.subscriptionManager.Stop()
+	}
 
 	// Cancel all active requests
 	s.activeRequestsLock.Lock()

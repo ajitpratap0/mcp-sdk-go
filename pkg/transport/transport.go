@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 
+	mcperrors "github.com/ajitpratap0/mcp-sdk-go/pkg/errors"
+	"github.com/ajitpratap0/mcp-sdk-go/pkg/logging"
 	"github.com/ajitpratap0/mcp-sdk-go/pkg/protocol"
 )
 
@@ -78,10 +80,20 @@ type BaseTransport struct {
 	nextID               int64
 	pendingRequests      map[string]chan *protocol.Response
 	logger               *log.Logger
+	logAdapter           *logging.TransportAdapter // Structured logging adapter
 }
 
 // NewBaseTransport creates a new BaseTransport
 func NewBaseTransport() *BaseTransport {
+	// Create structured logger
+	structuredLogger := logging.New(nil, logging.NewTextFormatter()).WithFields(
+		logging.String("component", "transport"),
+	)
+	structuredLogger.SetLevel(logging.InfoLevel)
+
+	// Create transport adapter
+	logAdapter := logging.NewTransportAdapter(structuredLogger, "BaseTransport")
+
 	return &BaseTransport{
 		requestHandlers:      make(map[string]RequestHandler),
 		notificationHandlers: make(map[string]NotificationHandler),
@@ -89,6 +101,7 @@ func NewBaseTransport() *BaseTransport {
 		nextID:               1,
 		pendingRequests:      make(map[string]chan *protocol.Response),
 		logger:               log.New(os.Stderr, "BaseTransport: ", log.LstdFlags|log.Lshortfile),
+		logAdapter:           logAdapter,
 	}
 }
 
@@ -99,13 +112,29 @@ func (t *BaseTransport) SetLogger(logger *log.Logger) {
 	t.logger = logger
 }
 
+// SetStructuredLogger sets a structured logger for the BaseTransport.
+func (t *BaseTransport) SetStructuredLogger(logger logging.Logger, transportName string) {
+	t.Lock()
+	defer t.Unlock()
+	t.logAdapter = logging.NewTransportAdapter(logger, transportName)
+}
+
 // Logf logs a formatted string using the transport's logger.
 func (t *BaseTransport) Logf(format string, v ...interface{}) {
 	t.RLock()
-	logger := t.logger
+	logAdapter := t.logAdapter
 	t.RUnlock()
-	if logger != nil {
-		logger.Printf(format, v...)
+	if logAdapter != nil {
+		// Use structured logging adapter
+		logAdapter.Logf(format, v...)
+	} else {
+		// Fallback to standard logger
+		t.RLock()
+		logger := t.logger
+		t.RUnlock()
+		if logger != nil {
+			logger.Printf(format, v...)
+		}
 	}
 }
 
@@ -189,8 +218,22 @@ func (t *BaseTransport) HandleRequest(ctx context.Context, req *protocol.Request
 		if r := recover(); r != nil {
 			stackTrace := string(debug.Stack())
 			t.Logf("ERROR: Panic in HandleRequest for method %s: %v\nStack trace:\n%s", req.Method, r, stackTrace)
-			response, err = protocol.NewErrorResponse(req.ID, protocol.InternalError,
-				fmt.Sprintf("Internal server error processing %s", req.Method), nil)
+
+			// Create structured panic recovery error with backward-compatible message
+			message := fmt.Sprintf("Internal server error processing %s", req.Method)
+			panicErr := mcperrors.NewError(
+				mcperrors.CodeInternalError,
+				message,
+				mcperrors.CategoryInternal,
+				mcperrors.SeverityError,
+			).WithContext(&mcperrors.Context{
+				RequestID: fmt.Sprintf("%v", req.ID),
+				Method:    req.Method,
+				Component: "BaseTransport",
+				Operation: "handle_request",
+			}).WithDetail(fmt.Sprintf("Panic: %v, Stack trace: %s", r, stackTrace))
+
+			response, err = mcperrors.ToJSONRPCResponse(panicErr, req.ID)
 		}
 	}()
 
@@ -199,7 +242,8 @@ func (t *BaseTransport) HandleRequest(ctx context.Context, req *protocol.Request
 	t.RUnlock()
 
 	if !ok {
-		return protocol.NewErrorResponse(req.ID, protocol.MethodNotFound, fmt.Sprintf("Method not found: %s", req.Method), nil)
+		methodNotFoundErr := mcperrors.CreateMethodNotFoundError(req.Method, req.ID)
+		return mcperrors.ToJSONRPCResponse(methodNotFoundErr, req.ID)
 	}
 
 	// Params are passed through directly to the handler
@@ -208,7 +252,9 @@ func (t *BaseTransport) HandleRequest(ctx context.Context, req *protocol.Request
 
 	result, err := handler(ctx, params)
 	if err != nil {
-		return protocol.NewErrorResponse(req.ID, protocol.InternalError, err.Error(), nil)
+		// Wrap handler errors with context
+		wrappedErr := mcperrors.WrapProtocolError(err, req.Method, req.ID)
+		return mcperrors.ToJSONRPCResponse(wrappedErr, req.ID)
 	}
 
 	return protocol.NewResponse(req.ID, result)
@@ -221,7 +267,19 @@ func (t *BaseTransport) HandleNotification(ctx context.Context, notif *protocol.
 		if r := recover(); r != nil {
 			stackTrace := string(debug.Stack())
 			t.Logf("ERROR: Panic in HandleNotification for method %s: %v\nStack trace:\n%s", notif.Method, r, stackTrace)
-			err = fmt.Errorf("internal error processing notification %s: %v", notif.Method, r)
+
+			// Create structured panic recovery error with backward-compatible message
+			message := fmt.Sprintf("internal error processing notification %s: %v", notif.Method, r)
+			err = mcperrors.NewError(
+				mcperrors.CodeInternalError,
+				message,
+				mcperrors.CategoryInternal,
+				mcperrors.SeverityError,
+			).WithContext(&mcperrors.Context{
+				Method:    notif.Method,
+				Component: "BaseTransport",
+				Operation: "handle_notification",
+			}).WithDetail(fmt.Sprintf("Stack trace: %s", stackTrace))
 		}
 	}()
 
@@ -250,7 +308,16 @@ func (t *BaseTransport) HandleNotification(ctx context.Context, notif *protocol.
 	t.RUnlock()
 
 	if !ok {
-		return fmt.Errorf("%w: %s", ErrUnsupportedMethod, notif.Method)
+		return mcperrors.NewError(
+			mcperrors.CodeMethodNotFound,
+			fmt.Sprintf("Unsupported notification method: %s", notif.Method),
+			mcperrors.CategoryProtocol,
+			mcperrors.SeverityError,
+		).WithContext(&mcperrors.Context{
+			Method:    notif.Method,
+			Component: "BaseTransport",
+			Operation: "handle_notification",
+		})
 	}
 
 	return handler(ctx, notif.Params)
@@ -321,4 +388,38 @@ func NewOptions(options ...Option) *Options {
 	}
 
 	return opts
+}
+
+// Cleanup cleans up all resources used by BaseTransport
+// This should be called when the transport is no longer needed
+func (t *BaseTransport) Cleanup() {
+	t.Lock()
+	defer t.Unlock()
+
+	// Close and remove all pending request channels
+	for id, ch := range t.pendingRequests {
+		select {
+		case <-ch:
+			// Channel already has a response, don't close
+		default:
+			close(ch)
+		}
+		delete(t.pendingRequests, id)
+	}
+
+	// Clear all handler maps
+	for k := range t.requestHandlers {
+		delete(t.requestHandlers, k)
+	}
+	for k := range t.notificationHandlers {
+		delete(t.notificationHandlers, k)
+	}
+	for k := range t.progressHandlers {
+		delete(t.progressHandlers, k)
+	}
+
+	// Reset ID counter
+	t.nextID = 1
+
+	// Note: We don't set logger to nil as it might be used for final cleanup logs
 }

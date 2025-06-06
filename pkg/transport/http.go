@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,7 +14,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	mcperrors "github.com/ajitpratap0/mcp-sdk-go/pkg/errors"
 	"github.com/ajitpratap0/mcp-sdk-go/pkg/protocol"
+	"golang.org/x/sync/errgroup"
 )
 
 // HTTPTransport implements Transport using HTTP with Server-Sent Events (SSE)
@@ -93,7 +96,7 @@ func (t *HTTPTransport) SendRequest(ctx context.Context, method string, params i
 
 	req, err := protocol.NewRequest(id, method, params)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, mcperrors.WrapProtocolError(err, method, id)
 	}
 
 	reqCtx, cancel := context.WithTimeout(ctx, t.options.RequestTimeout)
@@ -101,17 +104,39 @@ func (t *HTTPTransport) SendRequest(ctx context.Context, method string, params i
 
 	// Send HTTP request
 	if err := t.sendHTTPRequest(req); err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
+		return nil, mcperrors.HTTPTransportError("send_request", t.serverURL, 0, err).
+			WithContext(&mcperrors.Context{
+				RequestID: id,
+				Method:    method,
+				Component: "HTTPTransport",
+				Operation: "send_request",
+			})
 	}
 
 	// Wait for response through SSE channel
 	resp, err := t.WaitForResponse(reqCtx, id)
 	if err != nil {
-		return nil, fmt.Errorf("failed waiting for response: %w", err)
+		return nil, mcperrors.ResponseTimeout("http", id, t.options.RequestTimeout).
+			WithContext(&mcperrors.Context{
+				RequestID: id,
+				Method:    method,
+				Component: "HTTPTransport",
+				Operation: "wait_response",
+			})
 	}
 
 	if resp.Error != nil {
-		return nil, fmt.Errorf("server error: %s (code: %d)", resp.Error.Message, resp.Error.Code)
+		return nil, mcperrors.NewError(
+			int(resp.Error.Code),
+			resp.Error.Message,
+			mcperrors.CategoryProtocol,
+			mcperrors.SeverityError,
+		).WithContext(&mcperrors.Context{
+			RequestID: id,
+			Method:    method,
+			Component: "HTTPTransport",
+			Operation: "process_response",
+		}).WithData(resp.Error.Data)
 	}
 
 	return resp.Result, nil
@@ -121,7 +146,7 @@ func (t *HTTPTransport) SendRequest(ctx context.Context, method string, params i
 func (t *HTTPTransport) SendNotification(ctx context.Context, method string, params interface{}) error {
 	notif, err := protocol.NewNotification(method, params)
 	if err != nil {
-		return fmt.Errorf("failed to create notification: %w", err)
+		return mcperrors.WrapProtocolError(err, method, nil)
 	}
 
 	return t.sendHTTPRequest(notif)
@@ -130,68 +155,121 @@ func (t *HTTPTransport) SendNotification(ctx context.Context, method string, par
 // Start begins processing messages (blocking)
 func (t *HTTPTransport) Start(ctx context.Context) error {
 	if !t.running.CompareAndSwap(false, true) {
-		return fmt.Errorf("transport already running")
+		return mcperrors.TransportAlreadyRunning("http")
 	}
 
 	defer t.running.Store(false)
 
 	// Connect to SSE endpoint
 	if err := t.eventSource.Connect(); err != nil {
-		return fmt.Errorf("failed to connect to event source: %w", err)
+		return mcperrors.ConnectionFailed("http", t.eventSource.URL, err).
+			WithContext(&mcperrors.Context{
+				Component: "HTTPTransport",
+				Operation: "connect_sse",
+			})
 	}
 
-	// Process incoming SSE messages
-	for {
-		select {
-		case <-ctx.Done():
-			t.eventSource.Close()
-			return ctx.Err()
+	// Create errgroup for coordinated goroutine management
+	g, gctx := errgroup.WithContext(ctx)
 
-		case err := <-t.eventSource.ErrorChan:
-			// Check if we should still be running
-			if !t.running.Load() {
-				return nil
-			}
-
-			// Log the error
-			fmt.Printf("EventSource error: %v. Attempting to reconnect...\n", err)
-
-			// Try to reconnect on error
-			t.eventSource.Close()
-
-			// Introduce a delay before reconnecting with context check
+	// Start message processing goroutine
+	g.Go(func() error {
+		for {
 			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(5 * time.Second):
-				// Continue with reconnection
-			}
-
-			// Check again if we should still be running after the delay
-			if !t.running.Load() {
-				return nil
-			}
-
-			if reconnectErr := t.eventSource.Connect(); reconnectErr != nil {
-				return fmt.Errorf("failed to reconnect after error %v: %w", err, reconnectErr)
-			}
-			fmt.Println("EventSource reconnected successfully.")
-
-		case data := <-t.eventSource.MessageChan:
-			if err := t.handleMessage(ctx, data); err != nil {
-				// Just log errors, don't stop processing
-				fmt.Printf("Error handling message: %v\n", err)
+			case <-gctx.Done():
+				return gctx.Err()
+			case data, ok := <-t.eventSource.MessageChan:
+				if !ok {
+					return nil // Channel closed
+				}
+				if err := t.handleMessage(gctx, data); err != nil {
+					// Log error but continue processing
+					fmt.Printf("Error handling message: %v\n", err)
+				}
 			}
 		}
-	}
+	})
+
+	// Start error handling and reconnection goroutine
+	g.Go(func() error {
+		for {
+			select {
+			case <-gctx.Done():
+				return gctx.Err()
+			case err, ok := <-t.eventSource.ErrorChan:
+				if !ok {
+					return nil // Channel closed
+				}
+
+				// Check if we should still be running
+				if !t.running.Load() {
+					return nil
+				}
+
+				// Log the error
+				fmt.Printf("EventSource error: %v. Attempting to reconnect...\n", err)
+
+				// Try to reconnect on error
+				t.eventSource.Close()
+
+				// Introduce a delay before reconnecting with context check
+				select {
+				case <-gctx.Done():
+					return gctx.Err()
+				case <-time.After(5 * time.Second):
+					// Continue with reconnection
+				}
+
+				// Check again if we should still be running after the delay
+				if !t.running.Load() {
+					return nil
+				}
+
+				if reconnectErr := t.eventSource.Connect(); reconnectErr != nil {
+					return mcperrors.ConnectionFailed("http", t.eventSource.URL, reconnectErr).
+						WithContext(&mcperrors.Context{
+							Component: "HTTPTransport",
+							Operation: "reconnect_sse",
+						}).WithDetail(fmt.Sprintf("Previous error: %v", err))
+				}
+				fmt.Println("EventSource reconnected successfully.")
+			}
+		}
+	})
+
+	// Wait for all goroutines to complete or for any error
+	err := g.Wait()
+	t.eventSource.Close()
+	return err
 }
 
 // Stop gracefully shuts down the transport
 func (t *HTTPTransport) Stop(ctx context.Context) error {
 	t.running.Store(false)
+
+	// Close event source and wait for goroutines to finish
 	if t.eventSource != nil {
 		t.eventSource.Close()
+
+		// Give time for readEvents goroutine to finish
+		select {
+		case <-ctx.Done():
+			// Context cancelled, continue with cleanup
+		case <-time.After(500 * time.Millisecond):
+			// Timeout waiting for goroutines, continue with cleanup
+		}
 	}
+
+	// Clear headers map
+	t.mu.Lock()
+	for k := range t.headers {
+		delete(t.headers, k)
+	}
+	t.mu.Unlock()
+
+	// Clean up BaseTransport resources
+	t.BaseTransport.Cleanup()
+
 	return nil
 }
 
@@ -199,12 +277,20 @@ func (t *HTTPTransport) Stop(ctx context.Context) error {
 func (t *HTTPTransport) sendHTTPRequest(message interface{}) error {
 	data, err := json.Marshal(message)
 	if err != nil {
-		return fmt.Errorf("failed to marshal message: %w", err)
+		return mcperrors.CreateInternalError("marshal_message", err).
+			WithContext(&mcperrors.Context{
+				Component: "HTTPTransport",
+				Operation: "marshal_message",
+			})
 	}
 
 	req, err := http.NewRequest("POST", t.serverURL, bytes.NewBuffer(data))
 	if err != nil {
-		return fmt.Errorf("failed to create HTTP request: %w", err)
+		return mcperrors.HTTPTransportError("create_request", t.serverURL, 0, err).
+			WithContext(&mcperrors.Context{
+				Component: "HTTPTransport",
+				Operation: "create_http_request",
+			})
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -214,13 +300,21 @@ func (t *HTTPTransport) sendHTTPRequest(message interface{}) error {
 
 	resp, err := t.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("HTTP request failed: %w", err)
+		return mcperrors.HTTPTransportError("send_http_request", t.serverURL, 0, err).
+			WithContext(&mcperrors.Context{
+				Component: "HTTPTransport",
+				Operation: "execute_http_request",
+			})
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("HTTP error %d: %s", resp.StatusCode, string(body))
+		return mcperrors.HTTPTransportError("http_error_response", t.serverURL, resp.StatusCode, errors.New(string(body))).
+			WithContext(&mcperrors.Context{
+				Component: "HTTPTransport",
+				Operation: "process_http_response",
+			})
 	}
 
 	return nil
@@ -231,7 +325,11 @@ func (t *HTTPTransport) handleMessage(ctx context.Context, data []byte) error {
 	if protocol.IsRequest(data) {
 		var req protocol.Request
 		if err := json.Unmarshal(data, &req); err != nil {
-			return fmt.Errorf("failed to unmarshal request: %w", err)
+			return mcperrors.CreateInternalError("unmarshal_request", err).
+				WithContext(&mcperrors.Context{
+					Component: "HTTPTransport",
+					Operation: "unmarshal_request",
+				})
 		}
 
 		resp, err := t.HandleRequest(ctx, &req)
@@ -245,7 +343,11 @@ func (t *HTTPTransport) handleMessage(ctx context.Context, data []byte) error {
 	} else if protocol.IsResponse(data) {
 		var resp protocol.Response
 		if err := json.Unmarshal(data, &resp); err != nil {
-			return fmt.Errorf("failed to unmarshal response: %w", err)
+			return mcperrors.CreateInternalError("unmarshal_response", err).
+				WithContext(&mcperrors.Context{
+					Component: "HTTPTransport",
+					Operation: "unmarshal_response",
+				})
 		}
 
 		t.HandleResponse(&resp)
@@ -254,13 +356,25 @@ func (t *HTTPTransport) handleMessage(ctx context.Context, data []byte) error {
 	} else if protocol.IsNotification(data) {
 		var notif protocol.Notification
 		if err := json.Unmarshal(data, &notif); err != nil {
-			return fmt.Errorf("failed to unmarshal notification: %w", err)
+			return mcperrors.CreateInternalError("unmarshal_notification", err).
+				WithContext(&mcperrors.Context{
+					Component: "HTTPTransport",
+					Operation: "unmarshal_notification",
+				})
 		}
 
 		return t.HandleNotification(ctx, &notif)
 
 	} else {
-		return fmt.Errorf("unknown message type: %s", string(data))
+		return mcperrors.NewError(
+			mcperrors.CodeProtocolError,
+			"Unknown message type received",
+			mcperrors.CategoryProtocol,
+			mcperrors.SeverityError,
+		).WithContext(&mcperrors.Context{
+			Component: "HTTPTransport",
+			Operation: "process_message",
+		}).WithDetail(fmt.Sprintf("Data: %s", string(data)))
 	}
 }
 
@@ -275,7 +389,7 @@ func (es *EventSource) Connect() error {
 
 	req, err := http.NewRequest("GET", es.URL, nil)
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+		return mcperrors.HTTPTransportError("create_sse_request", es.URL, 0, err)
 	}
 
 	req.Header.Set("Accept", "text/event-stream")
@@ -286,23 +400,24 @@ func (es *EventSource) Connect() error {
 
 	resp, err := es.Client.Do(req)
 	if err != nil {
-		return fmt.Errorf("connection failed: %w", err)
+		return mcperrors.ConnectionFailed("http", es.URL, err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		if err := resp.Body.Close(); err != nil {
-			return fmt.Errorf("error closing response body: %w", err)
+			return mcperrors.HTTPTransportError("close_response_body", es.URL, resp.StatusCode, err)
 		}
-		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		return mcperrors.HTTPTransportError("unexpected_status", es.URL, resp.StatusCode, fmt.Errorf("unexpected status code: %d", resp.StatusCode))
 	}
 
 	// Check content type
 	contentType := resp.Header.Get("Content-Type")
 	if !strings.HasPrefix(contentType, "text/event-stream") {
 		if err := resp.Body.Close(); err != nil {
-			return fmt.Errorf("error closing response body: %w", err)
+			return mcperrors.HTTPTransportError("close_response_body", es.URL, resp.StatusCode, err)
 		}
-		return fmt.Errorf("expected content-type 'text/event-stream', got '%s'", contentType)
+		return mcperrors.HTTPTransportError("invalid_content_type", es.URL, resp.StatusCode,
+			fmt.Errorf("expected content-type 'text/event-stream', got '%s'", contentType))
 	}
 
 	es.Connection = resp
@@ -366,7 +481,7 @@ func (es *EventSource) readEvents() {
 			line, err := reader.ReadBytes('\n')
 			if err != nil {
 				select {
-				case es.ErrorChan <- fmt.Errorf("read error: %w", err):
+				case es.ErrorChan <- mcperrors.EventSourceError(es.URL, "read error", err):
 				default:
 					// Error channel is full, skip
 				}
@@ -399,7 +514,15 @@ func (es *EventSource) readEvents() {
 // For HTTPTransport, this is not fully applicable since it operates in a request/response model.
 // This is here to satisfy the Transport interface.
 func (t *HTTPTransport) Send(data []byte) error {
-	return fmt.Errorf("Send method not applicable for HTTPTransport")
+	return mcperrors.NewError(
+		mcperrors.CodeOperationNotSupported,
+		"Send method not applicable for HTTPTransport",
+		mcperrors.CategoryValidation,
+		mcperrors.SeverityError,
+	).WithContext(&mcperrors.Context{
+		Component: "HTTPTransport",
+		Operation: "send",
+	})
 }
 
 // SetReceiveHandler sets the handler for received messages.

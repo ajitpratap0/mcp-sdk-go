@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	mcperrors "github.com/ajitpratap0/mcp-sdk-go/pkg/errors"
 	"github.com/ajitpratap0/mcp-sdk-go/pkg/protocol"
 )
 
@@ -124,7 +125,11 @@ func (t *StreamableHTTPTransport) Initialize(ctx context.Context) error {
 	})
 
 	if err != nil {
-		return fmt.Errorf("initialize request failed: %w", err)
+		return mcperrors.HTTPTransportError("initialize", t.endpoint, 0, err).
+			WithContext(&mcperrors.Context{
+				Component: "StreamableHTTPTransport",
+				Operation: "initialize",
+			})
 	}
 
 	// Log the session ID after initialization
@@ -208,20 +213,35 @@ func (t *StreamableHTTPTransport) createEventSource(streamID string, initialLast
 			t.logger.Printf("[DEBUG] error closing response body after non-OK status: %v\n", closeErr)
 		}
 		if resp.StatusCode == http.StatusMethodNotAllowed {
-			return nil, fmt.Errorf("server does not support GET for SSE (405 Method Not Allowed)")
+			return nil, mcperrors.HTTPTransportError("method_not_allowed", t.endpoint, resp.StatusCode,
+				fmt.Errorf("server does not support GET for SSE")).
+				WithContext(&mcperrors.Context{
+					Component: "StreamableHTTPTransport",
+					Operation: "connect_event_source",
+				})
 		}
 		errMsg := fmt.Sprintf("failed to connect to event source, status: %s", resp.Status)
 		if readErr == nil && len(bodyBytes) > 0 {
 			errMsg = fmt.Sprintf("%s, body: %s", errMsg, string(bodyBytes))
 		}
-		return nil, fmt.Errorf("%s", errMsg)
+		return nil, mcperrors.HTTPTransportError("connect_failed", t.endpoint, resp.StatusCode,
+			errors.New(errMsg)).
+			WithContext(&mcperrors.Context{
+				Component: "StreamableHTTPTransport",
+				Operation: "connect_event_source",
+			})
 	}
 
 	if !strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
 		if err := resp.Body.Close(); err != nil {
-			return nil, fmt.Errorf("error closing response body: %w", err)
+			return nil, mcperrors.HTTPTransportError("close_response_body", t.endpoint, resp.StatusCode, err)
 		}
-		return nil, fmt.Errorf("server did not return text/event-stream content type")
+		return nil, mcperrors.HTTPTransportError("invalid_content_type", t.endpoint, resp.StatusCode,
+			fmt.Errorf("server did not return text/event-stream content type")).
+			WithContext(&mcperrors.Context{
+				Component: "StreamableHTTPTransport",
+				Operation: "validate_content_type",
+			})
 	}
 
 	es.Connection = resp
@@ -239,7 +259,7 @@ func (t *StreamableHTTPTransport) SendRequest(ctx context.Context, method string
 
 	reqMsg, err := protocol.NewRequest(idStr, method, params)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, mcperrors.WrapProtocolError(err, method, idStr)
 	}
 
 	// Use a unique stream ID for this request to differentiate its SSE stream
@@ -277,7 +297,13 @@ func (t *StreamableHTTPTransport) SendRequest(ctx context.Context, method string
 				t.logger.Printf("[WARN] SendRequest: failed to send $/cancelRequest notification for %s after POST error: %v\n", idStr, notifErr)
 			}
 		}
-		return nil, fmt.Errorf("failed to send HTTP request for %s: %w", idStr, err)
+		return nil, mcperrors.HTTPTransportError("send_request", t.endpoint, 0, err).
+			WithContext(&mcperrors.Context{
+				RequestID: idStr,
+				Method:    method,
+				Component: "StreamableHTTPTransport",
+				Operation: "send_http_request",
+			})
 	}
 
 	// Wait for the response, or for the original context or a specific wait timeout to be done.
@@ -290,7 +316,17 @@ func (t *StreamableHTTPTransport) SendRequest(ctx context.Context, method string
 			// This case should ideally not happen if sendHTTPRequest was successful and no context cancelled it
 			// before a response or error was processed by handleMessage/processEventSource.
 			// However, if the channel was closed by the defer without a response, this might occur.
-			return nil, fmt.Errorf("received nil response for request %s, channel may have been closed prematurely", idStr)
+			return nil, mcperrors.NewError(
+				mcperrors.CodeInternalError,
+				"Received nil response, channel may have been closed prematurely",
+				mcperrors.CategoryInternal,
+				mcperrors.SeverityError,
+			).WithContext(&mcperrors.Context{
+				RequestID: idStr,
+				Method:    method,
+				Component: "StreamableHTTPTransport",
+				Operation: "wait_response",
+			})
 		}
 		t.logger.Printf("[DEBUG] Received response for request %s\n", idStr)
 		if resp.Error != nil {
@@ -299,7 +335,13 @@ func (t *StreamableHTTPTransport) SendRequest(ctx context.Context, method string
 		var result interface{}
 		if len(resp.Result) > 0 {
 			if err := json.Unmarshal(resp.Result, &result); err != nil {
-				return nil, fmt.Errorf("failed to unmarshal result for request %s: %w", idStr, err)
+				return nil, mcperrors.CreateInternalError("unmarshal_result", err).
+					WithContext(&mcperrors.Context{
+						RequestID: idStr,
+						Method:    method,
+						Component: "StreamableHTTPTransport",
+						Operation: "unmarshal_result",
+					})
 			}
 		}
 		return result, nil
@@ -326,12 +368,38 @@ func (t *StreamableHTTPTransport) SendRequest(ctx context.Context, method string
 
 		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
 			// This was a timeout specific to waitCtx, not the parent ctx
-			return nil, fmt.Errorf("request %s timed out after %s: %w", idStr, t.options.RequestTimeout, err)
+			return nil, mcperrors.ResponseTimeout("streamable_http", idStr, t.options.RequestTimeout).
+				WithContext(&mcperrors.Context{
+					RequestID: idStr,
+					Method:    method,
+					Component: "StreamableHTTPTransport",
+					Operation: "wait_response",
+				})
 		} else if errors.Is(err, context.Canceled) || (ctx.Err() != nil) {
 			// This was a cancellation, either from parent ctx or explicitly on waitCtx (though less common)
-			return nil, fmt.Errorf("request %s cancelled: %w", idStr, ctx.Err()) // Prefer parent context error if available
+			return nil, mcperrors.NewError(
+				mcperrors.CodeOperationCancelled,
+				"Request was cancelled",
+				mcperrors.CategoryCancelled,
+				mcperrors.SeverityInfo,
+			).WithContext(&mcperrors.Context{
+				RequestID: idStr,
+				Method:    method,
+				Component: "StreamableHTTPTransport",
+				Operation: "wait_response",
+			}).WithDetail(fmt.Sprintf("Context error: %v", ctx.Err()))
 		}
-		return nil, fmt.Errorf("request %s failed: %w", idStr, err) // Fallback
+		return nil, mcperrors.NewError(
+			mcperrors.CodeInternalError,
+			"Request failed",
+			mcperrors.CategoryInternal,
+			mcperrors.SeverityError,
+		).WithContext(&mcperrors.Context{
+			RequestID: idStr,
+			Method:    method,
+			Component: "StreamableHTTPTransport",
+			Operation: "wait_response",
+		}).WithDetail(fmt.Sprintf("Error: %v", err))
 	}
 }
 
@@ -370,7 +438,7 @@ func (t *StreamableHTTPTransport) Stop(ctx context.Context) error {
 		return nil // Already stopped
 	}
 
-	// Close all event sources
+	// Close all event sources and wait for goroutines to finish
 	t.eventSources.Range(func(key, value interface{}) bool {
 		if es, ok := value.(*StreamableEventSource); ok {
 			es.Close()
@@ -378,6 +446,39 @@ func (t *StreamableHTTPTransport) Stop(ctx context.Context) error {
 		t.eventSources.Delete(key)
 		return true
 	})
+
+	// Note: Individual event sources use errgroup internally for coordination
+	// No need for manual timeout here
+
+	// Clear all handler maps
+	t.mu.Lock()
+	for k := range t.progressHandlers {
+		delete(t.progressHandlers, k)
+	}
+
+	for k := range t.responseHandlers {
+		delete(t.responseHandlers, k)
+	}
+
+	// Close and clear pending request channels
+	for k, ch := range t.pendingRequests {
+		select {
+		case <-ch:
+			// Channel already has a response, don't close
+		default:
+			close(ch)
+		}
+		delete(t.pendingRequests, k)
+	}
+
+	// Clear headers map
+	for k := range t.headers {
+		delete(t.headers, k)
+	}
+	t.mu.Unlock()
+
+	// Clean up BaseTransport resources
+	t.BaseTransport.Cleanup()
 
 	return nil
 }
@@ -515,11 +616,19 @@ func (t *StreamableHTTPTransport) sendHTTPRequest(ctx context.Context, message i
 		t.logger.Printf("[DEBUG] Received JSON response (Content-Type: %s)\n", contentType)
 		body, err := io.ReadAll(resp.Body) // Body is closed by defer
 		if err != nil {
-			return fmt.Errorf("failed to read JSON response body: %w", err)
+			return mcperrors.HTTPTransportError("read_response_body", t.endpoint, resp.StatusCode, err).
+				WithContext(&mcperrors.Context{
+					Component: "StreamableHTTPTransport",
+					Operation: "read_json_response",
+				})
 		}
 		if len(body) > 0 {
 			if err := t.handleMessage(context.Background(), body); err != nil { // Use background context as we have the full response
-				return fmt.Errorf("failed to process JSON message: %w", err)
+				return mcperrors.CreateInternalError("process_json_message", err).
+					WithContext(&mcperrors.Context{
+						Component: "StreamableHTTPTransport",
+						Operation: "handle_json_response",
+					})
 			}
 		}
 	} else if resp.StatusCode == http.StatusAccepted || resp.StatusCode == http.StatusNoContent { // HTTP 202 or 204
@@ -529,7 +638,11 @@ func (t *StreamableHTTPTransport) sendHTTPRequest(ctx context.Context, message i
 		t.logger.Printf("[DEBUG] Unexpected Content-Type in response: '%s' or unhandled status code: %d\n", contentType, resp.StatusCode)
 		body, err := io.ReadAll(resp.Body) // Body is closed by defer
 		if err != nil {
-			return fmt.Errorf("failed to read response body with unknown content type: %w", err)
+			return mcperrors.HTTPTransportError("read_unknown_response", t.endpoint, resp.StatusCode, err).
+				WithContext(&mcperrors.Context{
+					Component: "StreamableHTTPTransport",
+					Operation: "read_unknown_content_type",
+				})
 		}
 		if len(body) > 0 {
 			t.logger.Printf("[DEBUG] Response body with unknown content type: %s\n", string(body))
@@ -762,7 +875,11 @@ func (t *StreamableHTTPTransport) handleBatchMessage(ctx context.Context, data [
 	if len(responsesBatch) > 0 {
 		err := t.sendHTTPRequest(ctx, responsesBatch, "")
 		if err != nil {
-			return fmt.Errorf("failed to send batch responses: %w", err)
+			return mcperrors.HTTPTransportError("send_batch_responses", t.endpoint, 0, err).
+				WithContext(&mcperrors.Context{
+					Component: "StreamableHTTPTransport",
+					Operation: "send_batch_responses",
+				})
 		}
 	}
 
@@ -856,14 +973,23 @@ func (t *StreamableHTTPTransport) handleMessage(ctx context.Context, data []byte
 		// Parse as a request
 		var req protocol.Request
 		if err := json.Unmarshal(data, &req); err != nil {
-			return fmt.Errorf("failed to unmarshal request: %w", err)
+			return mcperrors.CreateInternalError("unmarshal_request", err).
+				WithContext(&mcperrors.Context{
+					Component: "StreamableHTTPTransport",
+					Operation: "handle_message",
+				})
 		}
 
 		// Handle the request using the provided context
 		resp, err := t.HandleRequest(ctx, &req)
 		if err != nil {
 			t.logger.Printf("[ERROR] Failed to handle request %s: %v\n", req.Method, err)
-			return fmt.Errorf("failed to handle request: %w", err)
+			return mcperrors.CreateInternalError("handle_request", err).
+				WithContext(&mcperrors.Context{
+					Method:    req.Method,
+					Component: "StreamableHTTPTransport",
+					Operation: "handle_request",
+				})
 		}
 
 		// Send the response if not nil
@@ -875,7 +1001,12 @@ func (t *StreamableHTTPTransport) handleMessage(ctx context.Context, data []byte
 			err = t.sendHTTPRequest(respCtx, resp, "")
 			if err != nil {
 				t.logger.Printf("[ERROR] Failed to send response for request %s: %v\n", req.Method, err)
-				return fmt.Errorf("failed to send response: %w", err)
+				return mcperrors.HTTPTransportError("send_response", t.endpoint, 0, err).
+					WithContext(&mcperrors.Context{
+						Method:    req.Method,
+						Component: "StreamableHTTPTransport",
+						Operation: "send_response",
+					})
 			}
 		}
 
@@ -885,7 +1016,11 @@ func (t *StreamableHTTPTransport) handleMessage(ctx context.Context, data []byte
 		// Parse as a response
 		var resp protocol.Response
 		if err := json.Unmarshal(data, &resp); err != nil {
-			return fmt.Errorf("failed to unmarshal response: %w", err)
+			return mcperrors.CreateInternalError("unmarshal_response", err).
+				WithContext(&mcperrors.Context{
+					Component: "StreamableHTTPTransport",
+					Operation: "handle_message",
+				})
 		}
 
 		// Handle the response
@@ -897,14 +1032,23 @@ func (t *StreamableHTTPTransport) handleMessage(ctx context.Context, data []byte
 		// Parse as a notification
 		var notif protocol.Notification
 		if err := json.Unmarshal(data, &notif); err != nil {
-			return fmt.Errorf("failed to unmarshal notification: %w", err)
+			return mcperrors.CreateInternalError("unmarshal_notification", err).
+				WithContext(&mcperrors.Context{
+					Component: "StreamableHTTPTransport",
+					Operation: "handle_message",
+				})
 		}
 
 		// Handle the notification with the provided context
 		err := t.HandleNotification(ctx, &notif)
 		if err != nil {
 			t.logger.Printf("[ERROR] Failed to handle notification %s: %v\n", notif.Method, err)
-			return fmt.Errorf("failed to handle notification: %w", err)
+			return mcperrors.CreateInternalError("handle_notification", err).
+				WithContext(&mcperrors.Context{
+					Method:    notif.Method,
+					Component: "StreamableHTTPTransport",
+					Operation: "handle_notification",
+				})
 		}
 
 		return nil
@@ -925,7 +1069,15 @@ func (t *StreamableHTTPTransport) handleMessage(ctx context.Context, data []byte
 	jsonErr := json.Unmarshal(data, &anyJSON)
 
 	if jsonErr != nil {
-		return fmt.Errorf("invalid JSON message: %w, data: %s", jsonErr, sampleData)
+		return mcperrors.NewError(
+			mcperrors.CodeProtocolError,
+			"Invalid JSON message received",
+			mcperrors.CategoryProtocol,
+			mcperrors.SeverityError,
+		).WithContext(&mcperrors.Context{
+			Component: "StreamableHTTPTransport",
+			Operation: "handle_message",
+		}).WithDetail(fmt.Sprintf("JSON error: %v, data: %s", jsonErr, sampleData))
 	} else {
 		// It's valid JSON but not a recognized JSON-RPC message type
 		// Since we're already handling empty objects above, this must be another format
@@ -1240,7 +1392,7 @@ func readLineWithTimeout(r *bufio.Reader, timeout time.Duration) (string, error)
 	case result := <-ch:
 		return result.line, result.err
 	case <-time.After(timeout):
-		return "", fmt.Errorf("timeout waiting for line")
+		return "", mcperrors.ConnectionTimeout("streamable_http", "", timeout)
 	}
 }
 
@@ -1249,7 +1401,15 @@ func readLineWithTimeout(r *bufio.Reader, timeout time.Duration) (string, error)
 // it operates in a request/response model. This is here to satisfy
 // the Transport interface.
 func (t *StreamableHTTPTransport) Send(data []byte) error {
-	return fmt.Errorf("Send method not applicable for StreamableHTTPTransport")
+	return mcperrors.NewError(
+		mcperrors.CodeOperationNotSupported,
+		"Send method not applicable for StreamableHTTPTransport",
+		mcperrors.CategoryValidation,
+		mcperrors.SeverityError,
+	).WithContext(&mcperrors.Context{
+		Component: "StreamableHTTPTransport",
+		Operation: "send",
+	})
 }
 
 // SetErrorHandler sets the handler for transport errors.

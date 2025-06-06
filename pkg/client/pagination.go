@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	mcperrors "github.com/ajitpratap0/mcp-sdk-go/pkg/errors"
 	"github.com/ajitpratap0/mcp-sdk-go/pkg/pagination"
 	"github.com/ajitpratap0/mcp-sdk-go/pkg/protocol"
 )
@@ -74,7 +75,7 @@ func FetchAllPages(ctx context.Context, initialParams *protocol.PaginationParams
 // ListAllTools retrieves all tools from the server, handling pagination automatically
 func (c *ClientConfig) ListAllTools(ctx context.Context, category string) ([]protocol.Tool, error) {
 	if !c.HasCapability(protocol.CapabilityTools) {
-		return nil, fmt.Errorf("server does not support tools")
+		return nil, mcperrors.CapabilityRequired(string(protocol.CapabilityTools))
 	}
 
 	// Create fetch function that adapts to the PaginatedFetchFunc signature
@@ -102,7 +103,7 @@ func (c *ClientConfig) ListAllTools(ctx context.Context, category string) ([]pro
 // ListAllResources retrieves all resources from the server, handling pagination automatically
 func (c *ClientConfig) ListAllResources(ctx context.Context, uri string, recursive bool) ([]protocol.Resource, []protocol.ResourceTemplate, error) {
 	if !c.HasCapability(protocol.CapabilityResources) {
-		return nil, nil, fmt.Errorf("server does not support resources")
+		return nil, nil, mcperrors.CapabilityRequired(string(protocol.CapabilityResources))
 	}
 
 	var allResources []protocol.Resource
@@ -139,7 +140,7 @@ func (c *ClientConfig) ListAllResources(ctx context.Context, uri string, recursi
 // ListAllPrompts retrieves all prompts from the server, handling pagination automatically
 func (c *ClientConfig) ListAllPrompts(ctx context.Context, tag string) ([]protocol.Prompt, error) {
 	if !c.HasCapability(protocol.CapabilityPrompts) {
-		return nil, fmt.Errorf("server does not support prompts")
+		return nil, mcperrors.CapabilityRequired(string(protocol.CapabilityPrompts))
 	}
 
 	// Create fetch function
@@ -167,7 +168,7 @@ func (c *ClientConfig) ListAllPrompts(ctx context.Context, tag string) ([]protoc
 // ListAllRoots retrieves all roots from the server, handling pagination automatically
 func (c *ClientConfig) ListAllRoots(ctx context.Context, tag string) ([]protocol.Root, error) {
 	if !c.HasCapability(protocol.CapabilityRoots) {
-		return nil, fmt.Errorf("server does not support roots")
+		return nil, mcperrors.CapabilityRequired(string(protocol.CapabilityRoots))
 	}
 
 	// Create fetch function

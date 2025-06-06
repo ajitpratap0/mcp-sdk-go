@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	mcperrors "github.com/ajitpratap0/mcp-sdk-go/pkg/errors"
+	"github.com/ajitpratap0/mcp-sdk-go/pkg/logging"
 	"github.com/ajitpratap0/mcp-sdk-go/pkg/protocol"
 	"github.com/ajitpratap0/mcp-sdk-go/pkg/transport"
 )
@@ -36,6 +38,10 @@ type Server struct {
 	ctx             context.Context
 	cancel          context.CancelFunc
 
+	// Request tracking for cancellation
+	activeRequests     map[string]context.CancelFunc
+	activeRequestsLock sync.RWMutex
+
 	// Logger
 	logger Logger
 }
@@ -48,23 +54,35 @@ type Logger interface {
 	Error(msg string, args ...interface{})
 }
 
-// DefaultLogger is a simple implementation of Logger
-type DefaultLogger struct{}
+// DefaultLogger is a simple implementation of Logger using structured logging
+type DefaultLogger struct {
+	logger logging.Logger
+}
+
+// NewDefaultLogger creates a new default logger
+func NewDefaultLogger() *DefaultLogger {
+	// Create a structured logger with text output
+	logger := logging.New(nil, logging.NewTextFormatter()).WithFields(
+		logging.String("component", "mcp-server"),
+	)
+	logger.SetLevel(logging.InfoLevel)
+	return &DefaultLogger{logger: logger}
+}
 
 func (l *DefaultLogger) Debug(msg string, args ...interface{}) {
-	fmt.Printf("[DEBUG] "+msg+"\n", args...)
+	logging.NewLegacyAdapter(l.logger).Debug(msg, args...)
 }
 
 func (l *DefaultLogger) Info(msg string, args ...interface{}) {
-	fmt.Printf("[INFO] "+msg+"\n", args...)
+	logging.NewLegacyAdapter(l.logger).Info(msg, args...)
 }
 
 func (l *DefaultLogger) Warn(msg string, args ...interface{}) {
-	fmt.Printf("[WARN] "+msg+"\n", args...)
+	logging.NewLegacyAdapter(l.logger).Warn(msg, args...)
 }
 
 func (l *DefaultLogger) Error(msg string, args ...interface{}) {
-	fmt.Printf("[ERROR] "+msg+"\n", args...)
+	logging.NewLegacyAdapter(l.logger).Error(msg, args...)
 }
 
 // ServerOption defines options for creating a server
@@ -161,6 +179,14 @@ func WithLogger(logger Logger) ServerOption {
 	}
 }
 
+// WithStructuredLogger sets a structured logger
+func WithStructuredLogger(logger logging.Logger) ServerOption {
+	return func(s *Server) {
+		// Wrap the structured logger with the legacy adapter
+		s.logger = &DefaultLogger{logger: logger}
+	}
+}
+
 // New creates a new MCP server
 func New(t transport.Transport, options ...ServerOption) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -171,9 +197,10 @@ func New(t transport.Transport, options ...ServerOption) *Server {
 		version:        "1.0.0",
 		capabilities:   make(map[string]bool),
 		featureOptions: make(map[string]interface{}),
-		logger:         &DefaultLogger{},
+		logger:         NewDefaultLogger(),
 		ctx:            ctx,
 		cancel:         cancel,
+		activeRequests: make(map[string]context.CancelFunc),
 	}
 
 	// Apply options
@@ -224,7 +251,13 @@ func New(t transport.Transport, options ...ServerOption) *Server {
 func (s *Server) Start(ctx context.Context) error {
 	// Initialize transport
 	if err := s.transport.Initialize(ctx); err != nil {
-		return fmt.Errorf("transport initialization failed: %w", err)
+		return mcperrors.TransportError("server", "initialization", err).
+			WithContext(&mcperrors.Context{
+				Component: "Server",
+				Operation: "Start",
+				Timestamp: time.Now(),
+			}).
+			WithDetail(fmt.Sprintf("Transport type: %T", s.transport))
 	}
 
 	s.logger.Info("Server starting with capabilities: %v", s.capabilities)
@@ -236,13 +269,22 @@ func (s *Server) Start(ctx context.Context) error {
 // Stop gracefully shuts down the server
 func (s *Server) Stop() error {
 	s.cancel()
+
+	// Cancel all active requests
+	s.activeRequestsLock.Lock()
+	for _, cancelFunc := range s.activeRequests {
+		cancelFunc()
+	}
+	s.activeRequests = make(map[string]context.CancelFunc)
+	s.activeRequestsLock.Unlock()
+
 	return s.transport.Stop(context.Background())
 }
 
 // NotifyToolsChanged notifies the client about tool changes
 func (s *Server) NotifyToolsChanged(added []protocol.Tool, removed []string, modified []protocol.Tool) error {
-	if !s.isInitialized() {
-		return errors.New("server not initialized")
+	if err := s.requireInitialized("NotifyToolsChanged"); err != nil {
+		return err
 	}
 
 	params := &protocol.ToolsChangedParams{
@@ -256,8 +298,8 @@ func (s *Server) NotifyToolsChanged(added []protocol.Tool, removed []string, mod
 
 // NotifyResourcesChanged notifies the client about resource changes
 func (s *Server) NotifyResourcesChanged(uri string, resources []protocol.Resource, removed []string, added []protocol.Resource, modified []protocol.Resource) error {
-	if !s.isInitialized() {
-		return errors.New("server not initialized")
+	if err := s.requireInitialized("NotifyResourcesChanged"); err != nil {
+		return err
 	}
 
 	params := &protocol.ResourcesChangedParams{
@@ -273,8 +315,8 @@ func (s *Server) NotifyResourcesChanged(uri string, resources []protocol.Resourc
 
 // NotifyResourceUpdated notifies the client about a resource update
 func (s *Server) NotifyResourceUpdated(uri string, contents *protocol.ResourceContents, deleted bool) error {
-	if !s.isInitialized() {
-		return errors.New("server not initialized")
+	if err := s.requireInitialized("NotifyResourceUpdated"); err != nil {
+		return err
 	}
 
 	params := &protocol.ResourceUpdatedParams{
@@ -291,8 +333,8 @@ func (s *Server) NotifyResourceUpdated(uri string, contents *protocol.ResourceCo
 
 // NotifyPromptsChanged notifies the client about prompt changes
 func (s *Server) NotifyPromptsChanged(added []protocol.Prompt, removed []string, modified []protocol.Prompt) error {
-	if !s.isInitialized() {
-		return errors.New("server not initialized")
+	if err := s.requireInitialized("NotifyPromptsChanged"); err != nil {
+		return err
 	}
 
 	params := &protocol.PromptsChangedParams{
@@ -321,15 +363,20 @@ func (s *Server) NotifyRootsChanged(added []protocol.Root, removed []string, mod
 
 // SendLog sends a log message to the client
 func (s *Server) SendLog(level protocol.LogLevel, message string, source string, data interface{}) error {
-	if !s.isInitialized() {
-		return errors.New("server not initialized")
+	if err := s.requireInitialized("SendLog"); err != nil {
+		return err
 	}
 
 	var dataJSON json.RawMessage
 	if data != nil {
 		bytes, err := json.Marshal(data)
 		if err != nil {
-			return fmt.Errorf("failed to marshal log data: %w", err)
+			return mcperrors.CreateInternalError("marshal_log_data", err).
+				WithContext(&mcperrors.Context{
+					Component: "Server",
+					Operation: "SendLog",
+					Timestamp: time.Now(),
+				}).WithDetail(fmt.Sprintf("Log level: %s, data type: %T", level, data))
 		}
 		dataJSON = bytes
 	}
@@ -347,8 +394,8 @@ func (s *Server) SendLog(level protocol.LogLevel, message string, source string,
 
 // SendProgress sends a progress notification to the client
 func (s *Server) SendProgress(id interface{}, message string, percent float64, completed bool) error {
-	if !s.isInitialized() {
-		return errors.New("server not initialized")
+	if err := s.requireInitialized("SendProgress"); err != nil {
+		return err
 	}
 
 	params := &protocol.ProgressParams{
@@ -375,12 +422,115 @@ func (s *Server) getClientInfo() *protocol.ClientInfo {
 	return s.clientInfo
 }
 
+// Helper functions for error handling
+
+// createRequestContext creates error context for request handling
+func (s *Server) createRequestContext(method string, requestID interface{}) *mcperrors.Context {
+	return &mcperrors.Context{
+		RequestID: fmt.Sprintf("%v", requestID),
+		Method:    method,
+		Component: "Server",
+		Operation: method,
+		Timestamp: time.Now(),
+	}
+}
+
+// validateParams validates and parses request parameters with structured errors
+func (s *Server) validateParams(params interface{}, target interface{}, method string) error {
+	if params == nil {
+		return mcperrors.MissingParameter("params").WithContext(
+			s.createRequestContext(method, nil),
+		)
+	}
+
+	data, err := json.Marshal(params)
+	if err != nil {
+		return mcperrors.CreateInternalError("marshal_params", err).
+			WithContext(s.createRequestContext(method, nil)).
+			WithDetail("Failed to process request parameters")
+	}
+
+	if err := json.Unmarshal(data, target); err != nil {
+		return mcperrors.InvalidParameter("params", params, fmt.Sprintf("%T", target)).
+			WithContext(s.createRequestContext(method, nil)).
+			WithDetail(err.Error())
+	}
+
+	return nil
+}
+
+// requireInitialized checks if server is initialized and returns structured error
+func (s *Server) requireInitialized(operation string) error {
+	if !s.isInitialized() {
+		return mcperrors.NewError(
+			mcperrors.CodeServerNotReady,
+			"Server must be initialized before this operation",
+			mcperrors.CategoryInternal,
+			mcperrors.SeverityError,
+		).WithContext(&mcperrors.Context{
+			Component: "Server",
+			Operation: operation,
+			Timestamp: time.Now(),
+		})
+	}
+	return nil
+}
+
+// requireProvider checks if a provider is configured and returns structured error
+func (s *Server) requireProvider(providerType string, provider interface{}, method string) error {
+	if provider == nil {
+		return mcperrors.ProviderNotConfigured(providerType).
+			WithContext(s.createRequestContext(method, nil))
+	}
+	return nil
+}
+
+// trackRequest adds a request to the active requests map with a cancellation function
+func (s *Server) trackRequest(requestID string, cancelFunc context.CancelFunc) {
+	s.activeRequestsLock.Lock()
+	defer s.activeRequestsLock.Unlock()
+	s.activeRequests[requestID] = cancelFunc
+	s.logger.Debug("Tracking request ID: %s", requestID)
+}
+
+// completeRequest removes a request from the active requests map
+func (s *Server) completeRequest(requestID string) {
+	s.activeRequestsLock.Lock()
+	defer s.activeRequestsLock.Unlock()
+	if cancelFunc, exists := s.activeRequests[requestID]; exists {
+		delete(s.activeRequests, requestID)
+		s.logger.Debug("Completed request ID: %s", requestID)
+		// Note: We don't call cancelFunc here as the request completed normally
+		_ = cancelFunc // Silence unused warning
+	}
+}
+
+// cancelRequest cancels a specific request by ID
+func (s *Server) cancelRequest(requestID string) bool {
+	s.activeRequestsLock.Lock()
+	defer s.activeRequestsLock.Unlock()
+	if cancelFunc, exists := s.activeRequests[requestID]; exists {
+		cancelFunc()
+		delete(s.activeRequests, requestID)
+		s.logger.Info("Cancelled request ID: %s", requestID)
+		return true
+	}
+	s.logger.Warn("Request ID not found for cancellation: %s", requestID)
+	return false
+}
+
+// RequestContext holds the context for a request with its ID
+type RequestContext struct {
+	ID string
+	context.Context
+}
+
 // Request handlers
 
 func (s *Server) handleInitialize(ctx context.Context, params interface{}) (interface{}, error) {
 	var initParams protocol.InitializeParams
-	if err := parseParams(params, &initParams); err != nil {
-		return nil, fmt.Errorf("invalid initialize params: %w", err)
+	if err := s.validateParams(params, &initParams, protocol.MethodInitialize); err != nil {
+		return nil, err
 	}
 
 	s.logger.Info("Initializing connection with client: %s %s", initParams.Name, initParams.Version)
@@ -422,8 +572,8 @@ func (s *Server) handleInitialized(ctx context.Context, params interface{}) erro
 
 func (s *Server) handleSetCapability(ctx context.Context, params interface{}) (interface{}, error) {
 	var capParams protocol.SetCapabilityParams
-	if err := parseParams(params, &capParams); err != nil {
-		return nil, fmt.Errorf("invalid setCapability params: %w", err)
+	if err := s.validateParams(params, &capParams, protocol.MethodSetCapability); err != nil {
+		return nil, err
 	}
 
 	// Check if this capability can be dynamically changed
@@ -435,20 +585,23 @@ func (s *Server) handleSetCapability(ctx context.Context, params interface{}) (i
 
 func (s *Server) handleCancel(ctx context.Context, params interface{}) (interface{}, error) {
 	var cancelParams protocol.CancelParams
-	if err := parseParams(params, &cancelParams); err != nil {
-		return nil, fmt.Errorf("invalid cancel params: %w", err)
+	if err := s.validateParams(params, &cancelParams, protocol.MethodCancel); err != nil {
+		return nil, err
 	}
 
-	// Handle cancellation (implementation-specific)
-	s.logger.Info("Received cancel request for ID: %v", cancelParams.ID)
+	// Convert the request ID to string for consistency
+	requestID := fmt.Sprintf("%v", cancelParams.ID)
 
-	return &protocol.CancelResult{Cancelled: false}, nil
+	// Cancel the request
+	cancelled := s.cancelRequest(requestID)
+
+	return &protocol.CancelResult{Cancelled: cancelled}, nil
 }
 
 func (s *Server) handlePing(ctx context.Context, params interface{}) (interface{}, error) {
 	var pingParams protocol.PingParams
-	if err := parseParams(params, &pingParams); err != nil {
-		return nil, fmt.Errorf("invalid ping params: %w", err)
+	if err := s.validateParams(params, &pingParams, protocol.MethodPing); err != nil {
+		return nil, err
 	}
 
 	timestamp := pingParams.Timestamp
@@ -461,12 +614,13 @@ func (s *Server) handlePing(ctx context.Context, params interface{}) (interface{
 
 func (s *Server) handleSetLogLevel(ctx context.Context, params interface{}) (interface{}, error) {
 	if !s.capabilities[string(protocol.CapabilityLogging)] {
-		return nil, errors.New("logging capability not supported")
+		return nil, mcperrors.CapabilityRequired(string(protocol.CapabilityLogging)).
+			WithContext(s.createRequestContext(protocol.MethodSetLogLevel, nil))
 	}
 
 	var logParams protocol.SetLogLevelParams
-	if err := parseParams(params, &logParams); err != nil {
-		return nil, fmt.Errorf("invalid setLogLevel params: %w", err)
+	if err := s.validateParams(params, &logParams, protocol.MethodSetLogLevel); err != nil {
+		return nil, err
 	}
 
 	// Set log level (implementation-specific)
@@ -476,13 +630,13 @@ func (s *Server) handleSetLogLevel(ctx context.Context, params interface{}) (int
 }
 
 func (s *Server) handleListTools(ctx context.Context, params interface{}) (interface{}, error) {
-	if s.toolsProvider == nil {
-		return nil, errors.New("tools provider not configured")
+	if err := s.requireProvider("tools", s.toolsProvider, protocol.MethodListTools); err != nil {
+		return nil, err
 	}
 
 	var listParams protocol.ListToolsParams
-	if err := parseParams(params, &listParams); err != nil {
-		return nil, fmt.Errorf("invalid listTools params: %w", err)
+	if err := s.validateParams(params, &listParams, protocol.MethodListTools); err != nil {
+		return nil, err
 	}
 
 	pagination := protocol.PaginationParams{
@@ -492,7 +646,9 @@ func (s *Server) handleListTools(ctx context.Context, params interface{}) (inter
 
 	tools, totalCount, nextCursor, hasMore, err := s.toolsProvider.ListTools(ctx, listParams.Category, &pagination)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list tools: %w", err)
+		return nil, mcperrors.ProviderError("tools", "ListTools", err).
+			WithContext(s.createRequestContext(protocol.MethodListTools, nil)).
+			WithDetail(fmt.Sprintf("Category: %s", listParams.Category))
 	}
 
 	return &protocol.ListToolsResult{
@@ -506,17 +662,24 @@ func (s *Server) handleListTools(ctx context.Context, params interface{}) (inter
 }
 
 func (s *Server) handleCallTool(ctx context.Context, params interface{}) (interface{}, error) {
-	if s.toolsProvider == nil {
-		return nil, errors.New("tools provider not configured")
+	if err := s.requireProvider("tools", s.toolsProvider, protocol.MethodCallTool); err != nil {
+		return nil, err
 	}
 
 	var callParams protocol.CallToolParams
-	if err := parseParams(params, &callParams); err != nil {
-		return nil, fmt.Errorf("invalid callTool params: %w", err)
+	if err := s.validateParams(params, &callParams, protocol.MethodCallTool); err != nil {
+		return nil, err
 	}
 
+	// Call the tool with the context, which may be cancelled
 	result, err := s.toolsProvider.CallTool(ctx, callParams.Name, callParams.Input, callParams.Context)
 	if err != nil {
+		// Check if the error is due to context cancellation
+		if ctx.Err() == context.Canceled {
+			return &protocol.CallToolResult{
+				Error: "Tool call was cancelled",
+			}, nil
+		}
 		// Return a valid result with an error message rather than failing the request
 		return &protocol.CallToolResult{
 			Error: err.Error(),
@@ -527,13 +690,13 @@ func (s *Server) handleCallTool(ctx context.Context, params interface{}) (interf
 }
 
 func (s *Server) handleListResources(ctx context.Context, params interface{}) (interface{}, error) {
-	if s.resourcesProvider == nil {
-		return nil, errors.New("resources provider not configured")
+	if err := s.requireProvider("resources", s.resourcesProvider, protocol.MethodListResources); err != nil {
+		return nil, err
 	}
 
 	var listParams protocol.ListResourcesParams
-	if err := parseParams(params, &listParams); err != nil {
-		return nil, fmt.Errorf("invalid listResources params: %w", err)
+	if err := s.validateParams(params, &listParams, protocol.MethodListResources); err != nil {
+		return nil, err
 	}
 
 	pagination := protocol.PaginationParams{
@@ -543,7 +706,9 @@ func (s *Server) handleListResources(ctx context.Context, params interface{}) (i
 
 	resources, templates, totalCount, nextCursor, hasMore, err := s.resourcesProvider.ListResources(ctx, listParams.URI, listParams.Recursive, &pagination)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list resources: %w", err)
+		return nil, mcperrors.ProviderError("resources", "ListResources", err).
+			WithContext(s.createRequestContext(protocol.MethodListResources, nil)).
+			WithDetail(fmt.Sprintf("URI: %s, Recursive: %t", listParams.URI, listParams.Recursive))
 	}
 
 	return &protocol.ListResourcesResult{
@@ -558,18 +723,20 @@ func (s *Server) handleListResources(ctx context.Context, params interface{}) (i
 }
 
 func (s *Server) handleReadResource(ctx context.Context, params interface{}) (interface{}, error) {
-	if s.resourcesProvider == nil {
-		return nil, errors.New("resources provider not configured")
+	if err := s.requireProvider("resources", s.resourcesProvider, protocol.MethodReadResource); err != nil {
+		return nil, err
 	}
 
 	var readParams protocol.ReadResourceParams
-	if err := parseParams(params, &readParams); err != nil {
-		return nil, fmt.Errorf("invalid readResource params: %w", err)
+	if err := s.validateParams(params, &readParams, protocol.MethodReadResource); err != nil {
+		return nil, err
 	}
 
 	contents, err := s.resourcesProvider.ReadResource(ctx, readParams.URI, readParams.TemplateParams, readParams.Range)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read resource: %w", err)
+		return nil, mcperrors.ProviderError("resources", "ReadResource", err).
+			WithContext(s.createRequestContext(protocol.MethodReadResource, nil)).
+			WithDetail(fmt.Sprintf("URI: %s", readParams.URI))
 	}
 
 	return &protocol.ReadResourceResult{
@@ -578,22 +745,25 @@ func (s *Server) handleReadResource(ctx context.Context, params interface{}) (in
 }
 
 func (s *Server) handleSubscribeResource(ctx context.Context, params interface{}) (interface{}, error) {
-	if s.resourcesProvider == nil {
-		return nil, errors.New("resources provider not configured")
+	if err := s.requireProvider("resources", s.resourcesProvider, protocol.MethodSubscribeResource); err != nil {
+		return nil, err
 	}
 
 	if !s.capabilities[string(protocol.CapabilityResourceSubscriptions)] {
-		return nil, errors.New("resource subscriptions not supported")
+		return nil, mcperrors.CapabilityRequired(string(protocol.CapabilityResourceSubscriptions)).
+			WithContext(s.createRequestContext(protocol.MethodSubscribeResource, nil))
 	}
 
 	var subParams protocol.SubscribeResourceParams
-	if err := parseParams(params, &subParams); err != nil {
-		return nil, fmt.Errorf("invalid subscribeResource params: %w", err)
+	if err := s.validateParams(params, &subParams, protocol.MethodSubscribeResource); err != nil {
+		return nil, err
 	}
 
 	success, err := s.resourcesProvider.SubscribeResource(ctx, subParams.URI, subParams.Recursive)
 	if err != nil {
-		return nil, fmt.Errorf("failed to subscribe to resource: %w", err)
+		return nil, mcperrors.ProviderError("resources", "SubscribeResource", err).
+			WithContext(s.createRequestContext(protocol.MethodSubscribeResource, nil)).
+			WithDetail(fmt.Sprintf("URI: %s, Recursive: %t", subParams.URI, subParams.Recursive))
 	}
 
 	return &protocol.SubscribeResourceResult{
@@ -602,13 +772,13 @@ func (s *Server) handleSubscribeResource(ctx context.Context, params interface{}
 }
 
 func (s *Server) handleListPrompts(ctx context.Context, params interface{}) (interface{}, error) {
-	if s.promptsProvider == nil {
-		return nil, errors.New("prompts provider not configured")
+	if err := s.requireProvider("prompts", s.promptsProvider, protocol.MethodListPrompts); err != nil {
+		return nil, err
 	}
 
 	var listParams protocol.ListPromptsParams
-	if err := parseParams(params, &listParams); err != nil {
-		return nil, fmt.Errorf("invalid listPrompts params: %w", err)
+	if err := s.validateParams(params, &listParams, protocol.MethodListPrompts); err != nil {
+		return nil, err
 	}
 
 	pagination := protocol.PaginationParams{
@@ -618,7 +788,9 @@ func (s *Server) handleListPrompts(ctx context.Context, params interface{}) (int
 
 	prompts, totalCount, nextCursor, hasMore, err := s.promptsProvider.ListPrompts(ctx, listParams.Tag, &pagination)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list prompts: %w", err)
+		return nil, mcperrors.ProviderError("prompts", "ListPrompts", err).
+			WithContext(s.createRequestContext(protocol.MethodListPrompts, nil)).
+			WithDetail(fmt.Sprintf("Tag: %s", listParams.Tag))
 	}
 
 	return &protocol.ListPromptsResult{
@@ -632,18 +804,20 @@ func (s *Server) handleListPrompts(ctx context.Context, params interface{}) (int
 }
 
 func (s *Server) handleGetPrompt(ctx context.Context, params interface{}) (interface{}, error) {
-	if s.promptsProvider == nil {
-		return nil, errors.New("prompts provider not configured")
+	if err := s.requireProvider("prompts", s.promptsProvider, protocol.MethodGetPrompt); err != nil {
+		return nil, err
 	}
 
 	var getParams protocol.GetPromptParams
-	if err := parseParams(params, &getParams); err != nil {
-		return nil, fmt.Errorf("invalid getPrompt params: %w", err)
+	if err := s.validateParams(params, &getParams, protocol.MethodGetPrompt); err != nil {
+		return nil, err
 	}
 
 	prompt, err := s.promptsProvider.GetPrompt(ctx, getParams.ID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get prompt: %w", err)
+		return nil, mcperrors.ProviderError("prompts", "GetPrompt", err).
+			WithContext(s.createRequestContext(protocol.MethodGetPrompt, nil)).
+			WithDetail(fmt.Sprintf("ID: %s", getParams.ID))
 	}
 
 	return &protocol.GetPromptResult{
@@ -652,31 +826,32 @@ func (s *Server) handleGetPrompt(ctx context.Context, params interface{}) (inter
 }
 
 func (s *Server) handleComplete(ctx context.Context, params interface{}) (interface{}, error) {
-	if s.completionProvider == nil {
-		return nil, errors.New("completion provider not configured")
+	if err := s.requireProvider("completion", s.completionProvider, protocol.MethodComplete); err != nil {
+		return nil, err
 	}
 
 	var completeParams protocol.CompleteParams
-	if err := parseParams(params, &completeParams); err != nil {
-		return nil, fmt.Errorf("invalid complete params: %w", err)
+	if err := s.validateParams(params, &completeParams, protocol.MethodComplete); err != nil {
+		return nil, err
 	}
 
 	result, err := s.completionProvider.Complete(ctx, &completeParams)
 	if err != nil {
-		return nil, fmt.Errorf("failed to generate completion: %w", err)
+		return nil, mcperrors.ProviderError("completion", "Complete", err).
+			WithContext(s.createRequestContext(protocol.MethodComplete, nil))
 	}
 
 	return result, nil
 }
 
 func (s *Server) handleListRoots(ctx context.Context, params interface{}) (interface{}, error) {
-	if s.rootsProvider == nil {
-		return nil, errors.New("roots provider not configured")
+	if err := s.requireProvider("roots", s.rootsProvider, protocol.MethodListRoots); err != nil {
+		return nil, err
 	}
 
 	var listParams protocol.ListRootsParams
-	if err := parseParams(params, &listParams); err != nil {
-		return nil, fmt.Errorf("invalid listRoots params: %w", err)
+	if err := s.validateParams(params, &listParams, protocol.MethodListRoots); err != nil {
+		return nil, err
 	}
 
 	pagination := protocol.PaginationParams{
@@ -686,7 +861,9 @@ func (s *Server) handleListRoots(ctx context.Context, params interface{}) (inter
 
 	roots, totalCount, nextCursor, hasMore, err := s.rootsProvider.ListRoots(ctx, listParams.Tag, &pagination)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list roots: %w", err)
+		return nil, mcperrors.ProviderError("roots", "ListRoots", err).
+			WithContext(s.createRequestContext(protocol.MethodListRoots, nil)).
+			WithDetail(fmt.Sprintf("Tag: %s", listParams.Tag))
 	}
 
 	return &protocol.ListRootsResult{
@@ -701,8 +878,9 @@ func (s *Server) handleListRoots(ctx context.Context, params interface{}) (inter
 
 // Utility functions
 
+// parseParams is kept for backward compatibility with tests
+// New code should use validateParams method for structured errors
 func parseParams(params interface{}, target interface{}) error {
-	// Handle nil params case explicitly
 	if params == nil {
 		return fmt.Errorf("params cannot be nil")
 	}

@@ -344,7 +344,7 @@ func TestListTools(t *testing.T) {
 	// Test when server doesn't support tools
 	client.capabilities[string(protocol.CapabilityTools)] = false
 	_, _, err = client.ListTools(context.Background(), "", nil)
-	if err == nil || err.Error() != "server does not support tools" {
+	if err == nil || !strings.Contains(err.Error(), "Required capability 'tools' is not enabled") {
 		t.Error("Expected error when server doesn't support tools")
 	}
 }
@@ -388,7 +388,7 @@ func TestCallTool(t *testing.T) {
 	// Test when server doesn't support tools
 	client.capabilities[string(protocol.CapabilityTools)] = false
 	_, err = client.CallTool(context.Background(), "test-tool", nil, nil)
-	if err == nil || err.Error() != "server does not support tools" {
+	if err == nil || !strings.Contains(err.Error(), "Required capability 'tools' is not enabled") {
 		t.Error("Expected error when server doesn't support tools")
 	}
 }
@@ -450,7 +450,7 @@ func TestListResources(t *testing.T) {
 	// Test when server doesn't support resources
 	client.capabilities[string(protocol.CapabilityResources)] = false
 	_, _, _, err = client.ListResources(context.Background(), "", false, nil)
-	if err == nil || err.Error() != "server does not support resources" {
+	if err == nil || !strings.Contains(err.Error(), "Required capability 'resources' is not enabled") {
 		t.Error("Expected error when server doesn't support resources")
 	}
 }
@@ -495,7 +495,7 @@ func TestReadResource(t *testing.T) {
 	// Test when server doesn't support resources
 	client.capabilities[string(protocol.CapabilityResources)] = false
 	_, err = client.ReadResource(context.Background(), "file.txt", nil, nil)
-	if err == nil || err.Error() != "server does not support resources" {
+	if err == nil || !strings.Contains(err.Error(), "Required capability 'resources' is not enabled") {
 		t.Error("Expected error when server doesn't support resources")
 	}
 }
@@ -547,7 +547,7 @@ func TestListPrompts(t *testing.T) {
 	// Test when server doesn't support prompts
 	client.capabilities[string(protocol.CapabilityPrompts)] = false
 	_, _, err = client.ListPrompts(context.Background(), "", nil)
-	if err == nil || err.Error() != "server does not support prompts" {
+	if err == nil || !strings.Contains(err.Error(), "Required capability 'prompts' is not enabled") {
 		t.Error("Expected error when server doesn't support prompts")
 	}
 }
@@ -591,7 +591,7 @@ func TestGetPrompt(t *testing.T) {
 	// Test when server doesn't support prompts
 	client.capabilities[string(protocol.CapabilityPrompts)] = false
 	_, err = client.GetPrompt(context.Background(), "greeting")
-	if err == nil || err.Error() != "server does not support prompts" {
+	if err == nil || !strings.Contains(err.Error(), "Required capability 'prompts' is not enabled") {
 		t.Error("Expected error when server doesn't support prompts")
 	}
 }
@@ -685,7 +685,7 @@ func TestSubscribeResource(t *testing.T) {
 	// Test when server doesn't support subscriptions
 	client.capabilities[string(protocol.CapabilityResourceSubscriptions)] = false
 	err = client.SubscribeResource(context.Background(), "resource1", false)
-	if err == nil || err.Error() != "server does not support resource subscriptions" {
+	if err == nil || !strings.Contains(err.Error(), "Required capability 'resourceSubscriptions' is not enabled") {
 		t.Error("Expected error when server doesn't support subscriptions")
 	}
 }
@@ -723,7 +723,7 @@ func TestListRoots(t *testing.T) {
 	// Test when server doesn't support roots
 	client.capabilities[string(protocol.CapabilityRoots)] = false
 	_, _, err = client.ListRoots(context.Background(), "", nil)
-	if err == nil || err.Error() != "server does not support roots" {
+	if err == nil || !strings.Contains(err.Error(), "Required capability 'roots' is not enabled") {
 		t.Error("Expected error when server doesn't support roots")
 	}
 }
@@ -757,7 +757,7 @@ func TestSetLogLevel(t *testing.T) {
 	// Test when server doesn't support logging
 	client.capabilities[string(protocol.CapabilityLogging)] = false
 	err = client.SetLogLevel(context.Background(), protocol.LogLevelDebug)
-	if err == nil || err.Error() != "server does not support logging" {
+	if err == nil || !strings.Contains(err.Error(), "Required capability 'logging' is not enabled") {
 		t.Error("Expected error when server doesn't support logging")
 	}
 }
@@ -1029,14 +1029,14 @@ func TestHandleSample(t *testing.T) {
 	// Test valid params
 	params := json.RawMessage(`{"messages": [{"role": "user", "content": "Hello"}]}`)
 	_, err := client.handleSample(context.Background(), params)
-	if err == nil || !strings.Contains(err.Error(), "sampling not implemented") {
+	if err == nil || !strings.Contains(err.Error(), "Operation 'sampling' is not supported") {
 		t.Error("Expected handleSample to return not implemented error")
 	}
 
 	// Test invalid params
 	invalidParams := json.RawMessage(`{invalid json}`)
 	_, err = client.handleSample(context.Background(), invalidParams)
-	if err == nil || !strings.Contains(err.Error(), "invalid params") {
+	if err == nil || !strings.Contains(err.Error(), "params") {
 		t.Error("Expected handleSample to fail with invalid params")
 	}
 }
@@ -1061,7 +1061,7 @@ func TestHandleCancel(t *testing.T) {
 	// Test invalid params
 	invalidParams := json.RawMessage(`{invalid json}`)
 	_, err = client.handleCancel(context.Background(), invalidParams)
-	if err == nil || !strings.Contains(err.Error(), "invalid params") {
+	if err == nil || !strings.Contains(err.Error(), "params") {
 		t.Error("Expected handleCancel to fail with invalid params")
 	}
 }
@@ -1099,7 +1099,7 @@ func TestHandlePing(t *testing.T) {
 	// Test invalid params
 	invalidParams := json.RawMessage(`{invalid json}`)
 	_, err = client.handlePing(context.Background(), invalidParams)
-	if err == nil || !strings.Contains(err.Error(), "invalid params") {
+	if err == nil || !strings.Contains(err.Error(), "params") {
 		t.Error("Expected handlePing to fail with invalid params")
 	}
 }
@@ -1173,7 +1173,7 @@ func TestComplete(t *testing.T) {
 	// Test when server doesn't support completion
 	client.capabilities[string(protocol.CapabilityComplete)] = false
 	_, err = client.Complete(context.Background(), params)
-	if err == nil || err.Error() != "server does not support completions" {
+	if err == nil || !strings.Contains(err.Error(), "Required capability 'complete' is not enabled") {
 		t.Error("Expected error when server doesn't support completions")
 	}
 }
@@ -1524,7 +1524,7 @@ func TestCallToolStreaming(t *testing.T) {
 	// Test when server doesn't support tools
 	client.capabilities[string(protocol.CapabilityTools)] = false
 	_, err = client.CallToolStreaming(context.Background(), "test-tool", nil, nil, nil)
-	if err == nil || err.Error() != "server does not support tools" {
+	if err == nil || !strings.Contains(err.Error(), "Required capability 'tools' is not enabled") {
 		t.Error("Expected error when server doesn't support tools")
 	}
 
@@ -1720,13 +1720,13 @@ func TestCallToolWithInvalidInput(t *testing.T) {
 
 	// Test with unmarshalable input
 	_, err := client.CallTool(context.Background(), "test-tool", make(chan int), nil)
-	if err == nil || !strings.Contains(err.Error(), "failed to marshal input") {
+	if err == nil || !strings.Contains(err.Error(), "marshal") {
 		t.Error("Expected CallTool to fail with marshal input error")
 	}
 
 	// Test with unmarshalable context
 	_, err = client.CallTool(context.Background(), "test-tool", nil, make(chan int))
-	if err == nil || !strings.Contains(err.Error(), "failed to marshal context") {
+	if err == nil || !strings.Contains(err.Error(), "marshal") {
 		t.Error("Expected CallTool to fail with marshal context error")
 	}
 }
@@ -1741,13 +1741,13 @@ func TestCallToolStreamingWithInvalidInput(t *testing.T) {
 
 	// Test with unmarshalable input
 	_, err := client.CallToolStreaming(context.Background(), "test-tool", make(chan int), nil, nil)
-	if err == nil || !strings.Contains(err.Error(), "failed to marshal input") {
+	if err == nil || !strings.Contains(err.Error(), "marshal") {
 		t.Error("Expected CallToolStreaming to fail with marshal input error")
 	}
 
 	// Test with unmarshalable context
 	_, err = client.CallToolStreaming(context.Background(), "test-tool", nil, make(chan int), nil)
-	if err == nil || !strings.Contains(err.Error(), "failed to marshal context") {
+	if err == nil || !strings.Contains(err.Error(), "marshal") {
 		t.Error("Expected CallToolStreaming to fail with marshal context error")
 	}
 }

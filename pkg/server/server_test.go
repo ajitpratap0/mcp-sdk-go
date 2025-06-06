@@ -1273,7 +1273,7 @@ func TestSendLogMarshalError(t *testing.T) {
 		t.Error("Expected SendLog to fail with unmarshalable data")
 	}
 
-	if !strings.Contains(err.Error(), "failed to marshal log data") {
+	if !strings.Contains(err.Error(), "marshal_log_data") {
 		t.Errorf("Expected error to mention marshaling failure, got: %v", err)
 	}
 }

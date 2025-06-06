@@ -3,10 +3,12 @@ package client
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"sync"
+	"time"
 
+	mcperrors "github.com/ajitpratap0/mcp-sdk-go/pkg/errors"
+	"github.com/ajitpratap0/mcp-sdk-go/pkg/logging"
 	"github.com/ajitpratap0/mcp-sdk-go/pkg/protocol"
 )
 
@@ -15,8 +17,8 @@ type StreamingUpdateHandler func(json.RawMessage)
 
 // CallToolStreaming invokes a tool on the server with streaming updates
 func (c *ClientConfig) CallToolStreaming(ctx context.Context, name string, input interface{}, toolContext interface{}, updateHandler StreamingUpdateHandler) (*protocol.CallToolResult, error) {
-	if !c.HasCapability(protocol.CapabilityTools) {
-		return nil, errors.New("server does not support tools")
+	if err := c.requireCapability(protocol.CapabilityTools, "CallToolStreaming"); err != nil {
+		return nil, err
 	}
 
 	// Create tool call parameters
@@ -30,7 +32,13 @@ func (c *ClientConfig) CallToolStreaming(ctx context.Context, name string, input
 	if input != nil {
 		inputJSON, err := json.Marshal(input)
 		if err != nil {
-			return nil, fmt.Errorf("failed to marshal input: %w", err)
+			return nil, mcperrors.CreateInternalError("marshal_input", err).
+				WithContext(&mcperrors.Context{
+					Component: "Client",
+					Operation: "CallToolStreaming",
+					Timestamp: time.Now(),
+				}).
+				WithDetail(fmt.Sprintf("Tool: %s, input type: %T", name, input))
 		}
 		params.Input = inputJSON
 	}
@@ -39,7 +47,13 @@ func (c *ClientConfig) CallToolStreaming(ctx context.Context, name string, input
 	if toolContext != nil {
 		contextJSON, err := json.Marshal(toolContext)
 		if err != nil {
-			return nil, fmt.Errorf("failed to marshal context: %w", err)
+			return nil, mcperrors.CreateInternalError("marshal_context", err).
+				WithContext(&mcperrors.Context{
+					Component: "Client",
+					Operation: "CallToolStreaming",
+					Timestamp: time.Now(),
+				}).
+				WithDetail(fmt.Sprintf("Tool: %s, context type: %T", name, toolContext))
 		}
 		params.Context = contextJSON
 	}
@@ -189,7 +203,7 @@ func (c *ClientConfig) registerProgressHandler(requestID string, handler func(js
 			if jsonData, err := json.Marshal(params); err == nil {
 				handler(jsonData)
 			} else {
-				fmt.Printf("[ERROR] Failed to marshal progress data: %v\n", err)
+				c.logger.Error("Failed to marshal progress data", logging.ErrorField(err))
 			}
 		}
 		return nil

@@ -12,7 +12,9 @@ import (
 	"runtime/debug"
 	"sync"
 
+	mcperrors "github.com/ajitpratap0/mcp-sdk-go/pkg/errors"
 	"github.com/ajitpratap0/mcp-sdk-go/pkg/protocol"
+	"golang.org/x/sync/errgroup"
 )
 
 // StdioTransport implements the Transport interface using standard input and output.
@@ -55,60 +57,113 @@ func (t *StdioTransport) Initialize(ctx context.Context) error {
 // Start begins reading messages from stdin and processing them.
 // This method blocks until the context is canceled or an error occurs.
 func (t *StdioTransport) Start(ctx context.Context) error {
+	// Create errgroup for coordinated goroutine management
+	g, gctx := errgroup.WithContext(ctx)
+
 	// Create a scanner for reading lines from the reader
 	scanner := bufio.NewScanner(t.reader)
 
-	// Create a channel for the scanner to signal it's done
+	// Channel for coordination between scanner and main loop
 	scannerDone := make(chan struct{})
 
-	// Set up a goroutine to read from stdin
-	SafeGo(t.BaseTransport.Logf, "stdio-scanner", func() {
+	// Start scanner goroutine
+	g.Go(func() error {
 		defer close(scannerDone)
 
 		// Read lines until EOF or error
 		for scanner.Scan() {
-			// Get the line (should be a complete JSON message)
-			line := scanner.Bytes()
+			select {
+			case <-gctx.Done():
+				return gctx.Err()
+			case <-t.done:
+				return nil
+			default:
+				// Get the line (should be a complete JSON message)
+				line := scanner.Bytes()
 
-			// Copy the line to avoid it being overwritten by the next Scan
-			data := make([]byte, len(line))
-			copy(data, line)
+				// Copy the line to avoid it being overwritten by the next Scan
+				data := make([]byte, len(line))
+				copy(data, line)
 
-			// Process the message in a goroutine to avoid blocking
-			SafeGo(t.BaseTransport.Logf, "stdio-process-message", func() {
-				t.processMessage(data)
-			})
+				// Process the message with error recovery
+				func() {
+					defer func() {
+						if r := recover(); r != nil {
+							stackTrace := string(debug.Stack())
+							t.BaseTransport.Logf("ERROR: Panic in message processing: %v\nStack trace:\n%s", r, stackTrace)
+						}
+					}()
+					t.processMessage(data)
+				}()
+			}
 		}
 
 		// Check for scanner errors
 		if err := scanner.Err(); err != nil && err != io.EOF {
-			t.handleError(fmt.Errorf("error reading from input: %w", err))
+			return mcperrors.StdioTransportError("read_input", err).
+				WithContext(&mcperrors.Context{
+					Component: "StdioTransport",
+					Operation: "scan_input",
+				})
+		}
+		return nil
+	})
+
+	// Start context monitoring goroutine to handle cleanup
+	g.Go(func() error {
+		select {
+		case <-gctx.Done():
+			// Close the reader to unblock scanner.Scan()
+			if closer, ok := t.reader.(io.Closer); ok {
+				closer.Close()
+			}
+			return gctx.Err()
+		case <-t.done:
+			// Close the reader to unblock scanner.Scan()
+			if closer, ok := t.reader.(io.Closer); ok {
+				closer.Close()
+			}
+			return nil
+		case <-scannerDone:
+			// Scanner finished normally
+			return nil
 		}
 	})
 
-	// Wait for either the context to be canceled or the scanner to finish
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-scannerDone:
-		return nil
-	case <-t.done:
-		return nil
-	}
+	// Wait for all goroutines to complete
+	return g.Wait()
 }
 
 // Stop halts the transport and cleans up resources.
 func (t *StdioTransport) Stop(ctx context.Context) error {
+	var flushErr error
+
 	t.stopOnce.Do(func() {
 		close(t.done) // Signal all loops relying on t.done to stop
+
+		// Note: errgroup.Wait() in Start() will handle coordinated shutdown
+		// No need for manual timeout here
+
+		// Flush the writer before cleanup
+		t.mutex.Lock()
+		if t.rawWriter != nil {
+			flushErr = t.rawWriter.Flush()
+		}
+
+		// Clear error handler
+		t.errorHandler = nil
+		t.mutex.Unlock()
+
+		// Clean up BaseTransport resources
+		t.BaseTransport.Cleanup()
 	})
 
-	t.mutex.Lock()
-	defer t.mutex.Unlock()
-	if t.rawWriter != nil {
-		if err := t.rawWriter.Flush(); err != nil {
-			return fmt.Errorf("error flushing writer on stop: %w", err)
-		}
+	if flushErr != nil {
+		return mcperrors.StdioTransportError("stop", flushErr).
+			WithContext(&mcperrors.Context{
+				Component: "StdioTransport",
+				Operation: "flush_on_stop",
+			})
 	}
 	return nil
 }
@@ -121,22 +176,34 @@ func (t *StdioTransport) Send(data []byte) error {
 	defer t.mutex.Unlock()
 
 	if t.rawWriter == nil {
-		return fmt.Errorf("transport writer is not initialized")
+		return mcperrors.TransportNotInitialized("stdio")
 	}
 
 	// Write the message followed by a newline
 	if _, err := t.rawWriter.Write(data); err != nil {
-		return fmt.Errorf("error writing to output: %w", err)
+		return mcperrors.StdioTransportError("send_message", err).
+			WithContext(&mcperrors.Context{
+				Component: "StdioTransport",
+				Operation: "write_data",
+			})
 	}
 
 	// Write a newline to terminate the message
 	if err := t.rawWriter.WriteByte('\n'); err != nil {
-		return fmt.Errorf("error writing newline to output: %w", err)
+		return mcperrors.StdioTransportError("send_message", err).
+			WithContext(&mcperrors.Context{
+				Component: "StdioTransport",
+				Operation: "write_newline",
+			})
 	}
 
 	// Flush the buffer to ensure the message is sent
 	if err := t.rawWriter.Flush(); err != nil {
-		return fmt.Errorf("error flushing output: %w", err)
+		return mcperrors.StdioTransportError("send_message", err).
+			WithContext(&mcperrors.Context{
+				Component: "StdioTransport",
+				Operation: "flush_output",
+			})
 	}
 
 	return nil

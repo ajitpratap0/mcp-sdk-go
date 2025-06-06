@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sync"
 
+	mcperrors "github.com/ajitpratap0/mcp-sdk-go/pkg/errors"
 	"github.com/ajitpratap0/mcp-sdk-go/pkg/protocol"
 )
 
@@ -72,16 +73,19 @@ func decodeCursor(cursorStr string) (int, error) {
 
 	data, err := base64.StdEncoding.DecodeString(cursorStr)
 	if err != nil {
-		return 0, fmt.Errorf("invalid cursor format: %w", err)
+		return 0, mcperrors.InvalidPagination("Invalid cursor format").
+			WithDetail(fmt.Sprintf("Cursor: %s, Error: %v", cursorStr, err))
 	}
 
 	var cursor PaginationCursor
 	if err := json.Unmarshal(data, &cursor); err != nil {
-		return 0, fmt.Errorf("invalid cursor data: %w", err)
+		return 0, mcperrors.InvalidPagination("Invalid cursor data").
+			WithDetail(fmt.Sprintf("Cursor: %s, Error: %v", cursorStr, err))
 	}
 
 	if cursor.Offset < 0 {
-		return 0, fmt.Errorf("invalid cursor offset: %d", cursor.Offset)
+		return 0, mcperrors.InvalidPagination("Cursor offset cannot be negative").
+			WithDetail(fmt.Sprintf("Offset: %d", cursor.Offset))
 	}
 
 	return cursor.Offset, nil
@@ -147,7 +151,8 @@ func (p *BaseToolsProvider) ListTools(ctx context.Context, category string, pagi
 	// Decode the cursor to get the starting offset
 	start, err := decodeCursor(cursor)
 	if err != nil {
-		return nil, 0, "", false, fmt.Errorf("invalid pagination cursor: %w", err)
+		return nil, 0, "", false, mcperrors.InvalidPagination("Invalid pagination cursor for tools list").
+			WithDetail(fmt.Sprintf("Cursor: %s, Error: %v", cursor, err))
 	}
 
 	// Calculate the end position
@@ -261,7 +266,8 @@ func (p *BaseResourcesProvider) ListResources(ctx context.Context, uri string, r
 	// Decode the cursor to get the starting offset
 	start, err := decodeCursor(cursor)
 	if err != nil {
-		return nil, nil, 0, "", false, fmt.Errorf("invalid pagination cursor: %w", err)
+		return nil, nil, 0, "", false, mcperrors.InvalidPagination("Invalid pagination cursor for resources list").
+			WithDetail(fmt.Sprintf("Cursor: %s, Error: %v", cursor, err))
 	}
 
 	// Apply pagination to resources first, then templates
@@ -374,7 +380,8 @@ func (p *BasePromptsProvider) ListPrompts(ctx context.Context, tag string, pagin
 	// Decode the cursor to get the starting offset
 	start, err := decodeCursor(cursor)
 	if err != nil {
-		return nil, 0, "", false, fmt.Errorf("invalid pagination cursor: %w", err)
+		return nil, 0, "", false, mcperrors.InvalidPagination("Invalid pagination cursor for prompts list").
+			WithDetail(fmt.Sprintf("Cursor: %s, Error: %v", cursor, err))
 	}
 
 	// Calculate the end position
@@ -468,7 +475,8 @@ func (p *BaseRootsProvider) ListRoots(ctx context.Context, tag string, paginatio
 	// Decode the cursor to get the starting offset
 	start, err := decodeCursor(cursor)
 	if err != nil {
-		return nil, 0, "", false, fmt.Errorf("invalid pagination cursor: %w", err)
+		return nil, 0, "", false, mcperrors.InvalidPagination("Invalid pagination cursor for roots list").
+			WithDetail(fmt.Sprintf("Cursor: %s, Error: %v", cursor, err))
 	}
 
 	// Calculate the end position

@@ -1,4 +1,17 @@
-// Package transport provides various transport mechanisms for MCP communication.
+// Package transport provides a modern, config-driven transport layer for MCP communication.
+//
+// Key Features:
+// - Unified TransportConfig-based creation (no legacy Options pattern)
+// - Automatic middleware composition (reliability, observability)
+// - Support for stdio and HTTP transports
+// - Production-ready reliability features (retries, circuit breakers)
+// - Comprehensive observability (metrics, logging, tracing)
+//
+// Usage:
+//
+//	config := transport.DefaultTransportConfig(transport.TransportTypeStreamableHTTP)
+//	config.Endpoint = "https://api.example.com/mcp"
+//	transport, err := transport.NewTransport(config)
 package transport
 
 import (
@@ -6,61 +19,57 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
-	"os"
-	"runtime/debug"
+	"io"
 	"sync"
 	"time"
 
-	mcperrors "github.com/ajitpratap0/mcp-sdk-go/pkg/errors"
-	"github.com/ajitpratap0/mcp-sdk-go/pkg/logging"
 	"github.com/ajitpratap0/mcp-sdk-go/pkg/protocol"
 )
 
-// ProgressHandler handles progress notifications for streaming operations
-type ProgressHandler func(params interface{}) error
-
-// Transport defines the interface for MCP transport mechanisms.
-// Transports are responsible for sending and receiving messages between
-// MCP clients and servers.
+// Transport defines the core interface for MCP transport mechanisms.
+// All transports must implement this minimal interface.
 type Transport interface {
-	// Initialize prepares the transport for use.
+	// Initialize prepares the transport for use
 	Initialize(ctx context.Context) error
 
-	// SendRequest sends a request and returns the response
+	// Core communication methods
 	SendRequest(ctx context.Context, method string, params interface{}) (interface{}, error)
-
-	// SendNotification sends a notification (one-way message)
 	SendNotification(ctx context.Context, method string, params interface{}) error
 
-	// RegisterRequestHandler registers a handler for incoming requests
+	// Handler registration
 	RegisterRequestHandler(method string, handler RequestHandler)
-
-	// RegisterNotificationHandler registers a handler for incoming notifications
 	RegisterNotificationHandler(method string, handler NotificationHandler)
-
-	// RegisterProgressHandler registers a handler for progress events
 	RegisterProgressHandler(id interface{}, handler ProgressHandler)
-
-	// UnregisterProgressHandler removes a progress handler
 	UnregisterProgressHandler(id interface{})
 
-	// GenerateID generates a unique ID for requests
-	GenerateID() string
-
-	// Start begins reading messages and processing them.
-	// This method blocks until the context is canceled or an error occurs.
+	// Lifecycle management
 	Start(ctx context.Context) error
-
-	// Stop halts the transport and cleans up resources.
 	Stop(ctx context.Context) error
 
-	// Send transmits a message over the transport.
-	Send(data []byte) error
+	// Message handling
+	HandleResponse(response *protocol.Response)
+	HandleRequest(ctx context.Context, request *protocol.Request) (*protocol.Response, error)
+	HandleNotification(ctx context.Context, notification *protocol.Notification) error
 
-	// SetErrorHandler sets the handler for transport errors.
+	// Utilities
+	GenerateID() string
+	GetRequestIDPrefix() string
+	GetNextID() int64
+	Cleanup()
+}
+
+// StreamingTransport extends Transport with raw message capabilities.
+// Used by transports like stdio that deal with raw byte streams.
+type StreamingTransport interface {
+	Transport
+
+	// Raw message handling
+	Send(data []byte) error
+	SetReceiveHandler(handler ReceiveHandler)
 	SetErrorHandler(handler ErrorHandler)
 }
+
+// Handlers for various transport operations
 
 // RequestHandler handles incoming requests
 type RequestHandler func(ctx context.Context, params interface{}) (interface{}, error)
@@ -68,73 +77,315 @@ type RequestHandler func(ctx context.Context, params interface{}) (interface{}, 
 // NotificationHandler handles incoming notifications
 type NotificationHandler func(ctx context.Context, params interface{}) error
 
-// ErrUnsupportedMethod is returned when a method is not supported
-var ErrUnsupportedMethod = errors.New("unsupported method")
+// ProgressHandler handles progress notifications
+type ProgressHandler func(params interface{}) error
 
-// BaseTransport provides common functionality for transports
+// ReceiveHandler processes raw incoming message data
+type ReceiveHandler func(data []byte)
+
+// ErrorHandler handles transport errors
+type ErrorHandler func(err error)
+
+// TransportType identifies the base transport implementation
+type TransportType string
+
+const (
+	TransportTypeStdio          TransportType = "stdio"
+	TransportTypeHTTP           TransportType = "http"
+	TransportTypeStreamableHTTP TransportType = "streamable_http"
+)
+
+// TransportConfig is the unified configuration for all transports
+type TransportConfig struct {
+	// Type of transport to create
+	Type TransportType `json:"type"`
+
+	// Transport-specific settings
+	Endpoint string `json:"endpoint,omitempty"` // For HTTP transports
+
+	// Testing support (for custom readers/writers in stdio)
+	StdioReader io.Reader `json:"-"` // Custom reader for stdio (testing only)
+	StdioWriter io.Writer `json:"-"` // Custom writer for stdio (testing only)
+
+	// Feature configuration
+	Features FeatureConfig `json:"features"`
+
+	// Component configurations
+	Connection    ConnectionConfig    `json:"connection"`
+	Reliability   ReliabilityConfig   `json:"reliability"`
+	Observability ObservabilityConfig `json:"observability"`
+	Performance   PerformanceConfig   `json:"performance"`
+
+	// Advanced features (when middleware implemented)
+	LoadBalancer *LoadBalancerConfig `json:"load_balancer,omitempty"`
+	Queuing      *QueuingConfig      `json:"queuing,omitempty"`
+	Parallelism  *ParallelismConfig  `json:"parallelism,omitempty"`
+}
+
+// FeatureConfig controls which middleware are enabled
+type FeatureConfig struct {
+	EnableReliability    bool `json:"enable_reliability"`
+	EnableObservability  bool `json:"enable_observability"`
+	EnableConnectionPool bool `json:"enable_connection_pool"`
+	EnableLoadBalancing  bool `json:"enable_load_balancing"`
+	EnableQueuing        bool `json:"enable_queuing"`
+	EnableParallelism    bool `json:"enable_parallelism"`
+	EnableStreaming      bool `json:"enable_streaming"`
+	EnableBatching       bool `json:"enable_batching"`
+	EnableAsyncTools     bool `json:"enable_async_tools"`
+}
+
+// ConnectionConfig for connection management
+type ConnectionConfig struct {
+	Timeout         time.Duration `json:"timeout"`
+	KeepAlive       time.Duration `json:"keep_alive"`
+	MaxIdleConns    int           `json:"max_idle_conns"`
+	MaxConnsPerHost int           `json:"max_conns_per_host"`
+	IdleConnTimeout time.Duration `json:"idle_conn_timeout"`
+}
+
+// ReliabilityConfig for retry and resilience
+type ReliabilityConfig struct {
+	MaxRetries         int                  `json:"max_retries"`
+	InitialRetryDelay  time.Duration        `json:"initial_retry_delay"`
+	MaxRetryDelay      time.Duration        `json:"max_retry_delay"`
+	RetryBackoffFactor float64              `json:"retry_backoff_factor"`
+	CircuitBreaker     CircuitBreakerConfig `json:"circuit_breaker"`
+}
+
+// CircuitBreakerConfig for circuit breaker pattern
+type CircuitBreakerConfig struct {
+	Enabled          bool          `json:"enabled"`
+	FailureThreshold int           `json:"failure_threshold"`
+	SuccessThreshold int           `json:"success_threshold"`
+	Timeout          time.Duration `json:"timeout"`
+}
+
+// ObservabilityConfig for metrics and logging
+type ObservabilityConfig struct {
+	EnableMetrics bool   `json:"enable_metrics"`
+	EnableLogging bool   `json:"enable_logging"`
+	LogLevel      string `json:"log_level"`
+	MetricsPrefix string `json:"metrics_prefix"`
+}
+
+// PerformanceConfig for performance tuning
+type PerformanceConfig struct {
+	BufferSize     int           `json:"buffer_size"`
+	FlushInterval  time.Duration `json:"flush_interval"`
+	MaxConcurrency int           `json:"max_concurrency"`
+	RequestTimeout time.Duration `json:"request_timeout"`
+}
+
+// LoadBalancerConfig for load balancing (placeholder for future middleware)
+type LoadBalancerConfig struct {
+	Strategy  string   `json:"strategy"`
+	Endpoints []string `json:"endpoints"`
+}
+
+// QueuingConfig for request queuing (placeholder for future middleware)
+type QueuingConfig struct {
+	MaxQueueSize   int           `json:"max_queue_size"`
+	RequestTimeout time.Duration `json:"request_timeout"`
+}
+
+// ParallelismConfig for parallel processing (placeholder for future middleware)
+type ParallelismConfig struct {
+	MaxWorkers int `json:"max_workers"`
+}
+
+// SessionHandler handles session lifecycle events
+type SessionHandler func(sessionID string, event SessionEvent)
+
+// SessionEvent types
+type SessionEvent int
+
+const (
+	SessionEventCreated SessionEvent = iota
+	SessionEventResumed
+	SessionEventTerminated
+)
+
+// Errors
+var (
+	ErrUnsupportedMethod        = errors.New("unsupported method")
+	ErrUnsupportedTransportType = errors.New("unsupported transport type")
+)
+
+// NewTransport creates a new transport with the specified configuration
+func NewTransport(config TransportConfig) (Transport, error) {
+	// Validate configuration
+	if err := validateTransportConfig(config); err != nil {
+		return nil, err
+	}
+
+	// Create base transport using modern constructors
+	var base Transport
+	var err error
+
+	switch config.Type {
+	case TransportTypeStdio:
+		base, err = newStdioTransport(config)
+	case TransportTypeStreamableHTTP:
+		base, err = newStreamableHTTPTransport(config)
+	case TransportTypeHTTP:
+		base, err = newStreamableHTTPTransport(config) // HTTP uses StreamableHTTP internally
+	default:
+		return nil, ErrUnsupportedTransportType
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	// Build middleware chain
+	builder := NewMiddlewareBuilder(config)
+	middleware := builder.Build()
+
+	// Apply middleware chain
+	transport := ChainMiddleware(middleware...).Wrap(base)
+
+	return transport, nil
+}
+
+// validateTransportConfig validates the transport configuration
+func validateTransportConfig(config TransportConfig) error {
+	switch config.Type {
+	case TransportTypeStdio:
+		// No additional validation needed for stdio
+		return nil
+	case TransportTypeStreamableHTTP, TransportTypeHTTP:
+		if config.Endpoint == "" {
+			return errors.New("endpoint is required for HTTP transports")
+		}
+		return nil
+	default:
+		return ErrUnsupportedTransportType
+	}
+}
+
+// BaseTransport provides common functionality for all transport implementations.
+// It handles request/response management, handler registration, and ID generation.
 type BaseTransport struct {
 	sync.RWMutex
 	requestHandlers      map[string]RequestHandler
 	notificationHandlers map[string]NotificationHandler
-	progressHandlers     map[string]ProgressHandler
+	progressHandlers     map[interface{}]ProgressHandler
 	nextID               int64
 	pendingRequests      map[string]chan *protocol.Response
-	logger               *log.Logger
-	logAdapter           *logging.TransportAdapter // Structured logging adapter
+	requestIDPrefix      string
+}
+
+// Logf logs a formatted message (stub for compatibility)
+func (t *BaseTransport) Logf(format string, args ...interface{}) {
+	// This is a stub - logging should be handled by observability middleware
+}
+
+// HandleRequest processes an incoming request with panic recovery
+func (t *BaseTransport) HandleRequest(ctx context.Context, request *protocol.Request) (resp *protocol.Response, err error) {
+	// Recover from panics and convert to errors
+	defer func() {
+		if r := recover(); r != nil {
+			resp = &protocol.Response{
+				ID: request.ID,
+				Error: &protocol.Error{
+					Code:    protocol.InternalError,
+					Message: fmt.Sprintf("Internal server error processing %s", request.Method),
+				},
+			}
+			err = nil // We return the error in the response, not as an error
+		}
+	}()
+
+	t.RLock()
+	handler, ok := t.requestHandlers[request.Method]
+	t.RUnlock()
+
+	if !ok {
+		return nil, fmt.Errorf("no handler for method: %s", request.Method)
+	}
+
+	result, handlerErr := handler(ctx, request.Params)
+	if handlerErr != nil {
+		return &protocol.Response{
+			ID:    request.ID,
+			Error: &protocol.Error{Code: -32603, Message: handlerErr.Error()},
+		}, nil
+	}
+
+	// Marshal result to json.RawMessage
+	resultBytes, marshalErr := json.Marshal(result)
+	if marshalErr != nil {
+		return &protocol.Response{
+			ID:    request.ID,
+			Error: &protocol.Error{Code: -32603, Message: fmt.Sprintf("failed to marshal result: %v", marshalErr)},
+		}, nil
+	}
+
+	return &protocol.Response{
+		ID:     request.ID,
+		Result: resultBytes,
+	}, nil
+}
+
+// HandleResponse processes an incoming response
+func (t *BaseTransport) HandleResponse(response *protocol.Response) {
+	t.Lock()
+	ch, ok := t.pendingRequests[fmt.Sprintf("%v", response.ID)]
+	if ok {
+		ch <- response
+		delete(t.pendingRequests, fmt.Sprintf("%v", response.ID))
+	}
+	t.Unlock()
+}
+
+// HandleNotification processes an incoming notification with panic recovery
+func (t *BaseTransport) HandleNotification(ctx context.Context, notification *protocol.Notification) (err error) {
+	// Recover from panics and convert to errors
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("internal error processing notification %s: %v", notification.Method, r)
+		}
+	}()
+
+	t.RLock()
+	handler, ok := t.notificationHandlers[notification.Method]
+	t.RUnlock()
+
+	if !ok {
+		return fmt.Errorf("no handler for notification: %s", notification.Method)
+	}
+
+	return handler(ctx, notification.Params)
+}
+
+// WaitForResponse waits for a response with the given ID
+func (t *BaseTransport) WaitForResponse(ctx context.Context, id string) (*protocol.Response, error) {
+	t.Lock()
+	ch := make(chan *protocol.Response, 1)
+	t.pendingRequests[id] = ch
+	t.Unlock()
+
+	select {
+	case response := <-ch:
+		return response, nil
+	case <-ctx.Done():
+		t.Lock()
+		delete(t.pendingRequests, id)
+		t.Unlock()
+		return nil, ctx.Err()
+	}
 }
 
 // NewBaseTransport creates a new BaseTransport
 func NewBaseTransport() *BaseTransport {
-	// Create structured logger
-	structuredLogger := logging.New(nil, logging.NewTextFormatter()).WithFields(
-		logging.String("component", "transport"),
-	)
-	structuredLogger.SetLevel(logging.InfoLevel)
-
-	// Create transport adapter
-	logAdapter := logging.NewTransportAdapter(structuredLogger, "BaseTransport")
-
 	return &BaseTransport{
 		requestHandlers:      make(map[string]RequestHandler),
 		notificationHandlers: make(map[string]NotificationHandler),
-		progressHandlers:     make(map[string]ProgressHandler),
+		progressHandlers:     make(map[interface{}]ProgressHandler),
 		nextID:               1,
 		pendingRequests:      make(map[string]chan *protocol.Response),
-		logger:               log.New(os.Stderr, "BaseTransport: ", log.LstdFlags|log.Lshortfile),
-		logAdapter:           logAdapter,
-	}
-}
-
-// SetLogger sets a custom logger for the BaseTransport.
-func (t *BaseTransport) SetLogger(logger *log.Logger) {
-	t.Lock()
-	defer t.Unlock()
-	t.logger = logger
-}
-
-// SetStructuredLogger sets a structured logger for the BaseTransport.
-func (t *BaseTransport) SetStructuredLogger(logger logging.Logger, transportName string) {
-	t.Lock()
-	defer t.Unlock()
-	t.logAdapter = logging.NewTransportAdapter(logger, transportName)
-}
-
-// Logf logs a formatted string using the transport's logger.
-func (t *BaseTransport) Logf(format string, v ...interface{}) {
-	t.RLock()
-	logAdapter := t.logAdapter
-	t.RUnlock()
-	if logAdapter != nil {
-		// Use structured logging adapter
-		logAdapter.Logf(format, v...)
-	} else {
-		// Fallback to standard logger
-		t.RLock()
-		logger := t.logger
-		t.RUnlock()
-		if logger != nil {
-			logger.Printf(format, v...)
-		}
+		requestIDPrefix:      "req",
 	}
 }
 
@@ -152,7 +403,21 @@ func (t *BaseTransport) RegisterNotificationHandler(method string, handler Notif
 	t.notificationHandlers[method] = handler
 }
 
-// GetNextID returns the next unique request ID
+// RegisterProgressHandler registers a handler for progress updates
+func (t *BaseTransport) RegisterProgressHandler(id interface{}, handler ProgressHandler) {
+	t.Lock()
+	defer t.Unlock()
+	t.progressHandlers[id] = handler
+}
+
+// UnregisterProgressHandler removes a progress handler
+func (t *BaseTransport) UnregisterProgressHandler(id interface{}) {
+	t.Lock()
+	defer t.Unlock()
+	delete(t.progressHandlers, id)
+}
+
+// GetNextID returns the next unique ID
 func (t *BaseTransport) GetNextID() int64 {
 	t.Lock()
 	defer t.Unlock()
@@ -161,265 +426,66 @@ func (t *BaseTransport) GetNextID() int64 {
 	return id
 }
 
-// WaitForResponse waits for a response with the specified ID
-func (t *BaseTransport) WaitForResponse(ctx context.Context, id interface{}) (*protocol.Response, error) {
-	ch := make(chan *protocol.Response, 1)
-
-	// Ensure id is a string for map key consistency
-	stringID := fmt.Sprintf("%v", id)
-
-	t.Lock()
-	t.pendingRequests[stringID] = ch
-	t.Unlock()
-
-	defer func() {
-		t.Lock()
-		delete(t.pendingRequests, stringID)
-		t.Unlock()
-	}()
-
-	select {
-	case resp := <-ch:
-		return resp, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-}
-
-// HandleResponse handles an incoming response
-func (t *BaseTransport) HandleResponse(resp *protocol.Response) {
-	// Convert response ID to string for consistent map lookup
-	stringID := fmt.Sprintf("%v", resp.ID)
-
-	t.RLock()
-	ch, ok := t.pendingRequests[stringID]
-	pendingReqsCount := len(t.pendingRequests)
-	t.RUnlock()
-
-	t.Logf("HandleResponse: Received response for ID '%s' (original: %v, type: %T). Pending requests: %d. Channel found: %t", stringID, resp.ID, resp.ID, pendingReqsCount, ok)
-
-	if ok {
-		select {
-		case ch <- resp:
-			t.Logf("HandleResponse: Successfully sent response for ID '%s' to channel.", stringID)
-		default:
-			// Response channel is full or closed, or context expired waiting for send
-			t.Logf("HandleResponse: Failed to send response for ID '%s' to channel (channel full, closed, or context expired).", stringID)
-		}
-	} else {
-		t.Logf("HandleResponse: No pending request found for response ID '%s'.", stringID)
-	}
-}
-
-// HandleRequest processes an incoming request
-func (t *BaseTransport) HandleRequest(ctx context.Context, req *protocol.Request) (response *protocol.Response, err error) {
-	// Recover from panics and convert to proper error response
-	defer func() {
-		if r := recover(); r != nil {
-			stackTrace := string(debug.Stack())
-			t.Logf("ERROR: Panic in HandleRequest for method %s: %v\nStack trace:\n%s", req.Method, r, stackTrace)
-
-			// Create structured panic recovery error with backward-compatible message
-			message := fmt.Sprintf("Internal server error processing %s", req.Method)
-			panicErr := mcperrors.NewError(
-				mcperrors.CodeInternalError,
-				message,
-				mcperrors.CategoryInternal,
-				mcperrors.SeverityError,
-			).WithContext(&mcperrors.Context{
-				RequestID: fmt.Sprintf("%v", req.ID),
-				Method:    req.Method,
-				Component: "BaseTransport",
-				Operation: "handle_request",
-			}).WithDetail(fmt.Sprintf("Panic: %v, Stack trace: %s", r, stackTrace))
-
-			response, err = mcperrors.ToJSONRPCResponse(panicErr, req.ID)
-		}
-	}()
-
-	t.RLock()
-	handler, ok := t.requestHandlers[req.Method]
-	t.RUnlock()
-
-	if !ok {
-		methodNotFoundErr := mcperrors.CreateMethodNotFoundError(req.Method, req.ID)
-		return mcperrors.ToJSONRPCResponse(methodNotFoundErr, req.ID)
-	}
-
-	// Params are passed through directly to the handler
-	// The handler will determine how to interpret the params
-	params := req.Params
-
-	result, err := handler(ctx, params)
-	if err != nil {
-		// Wrap handler errors with context
-		wrappedErr := mcperrors.WrapProtocolError(err, req.Method, req.ID)
-		return mcperrors.ToJSONRPCResponse(wrappedErr, req.ID)
-	}
-
-	return protocol.NewResponse(req.ID, result)
-}
-
-// HandleNotification processes an incoming notification
-func (t *BaseTransport) HandleNotification(ctx context.Context, notif *protocol.Notification) (err error) {
-	// Recover from panics in notification handlers
-	defer func() {
-		if r := recover(); r != nil {
-			stackTrace := string(debug.Stack())
-			t.Logf("ERROR: Panic in HandleNotification for method %s: %v\nStack trace:\n%s", notif.Method, r, stackTrace)
-
-			// Create structured panic recovery error with backward-compatible message
-			message := fmt.Sprintf("internal error processing notification %s: %v", notif.Method, r)
-			err = mcperrors.NewError(
-				mcperrors.CodeInternalError,
-				message,
-				mcperrors.CategoryInternal,
-				mcperrors.SeverityError,
-			).WithContext(&mcperrors.Context{
-				Method:    notif.Method,
-				Component: "BaseTransport",
-				Operation: "handle_notification",
-			}).WithDetail(fmt.Sprintf("Stack trace: %s", stackTrace))
-		}
-	}()
-
-	// Special handling for progress notifications
-	if notif.Method == protocol.MethodProgress && len(notif.Params) > 0 {
-		// Extract the request ID from the progress params
-		var progressParams protocol.ProgressParams
-		if err := json.Unmarshal(notif.Params, &progressParams); err == nil && progressParams.ID != nil {
-			// Convert ID to string for map lookup
-			idStr := fmt.Sprintf("%v", progressParams.ID)
-
-			// Find and call progress handler if registered
-			t.RLock()
-			handler, ok := t.progressHandlers[idStr]
-			t.RUnlock()
-
-			if ok {
-				return handler(notif.Params)
-			}
-		}
-	}
-
-	// Regular notification handling
-	t.RLock()
-	handler, ok := t.notificationHandlers[notif.Method]
-	t.RUnlock()
-
-	if !ok {
-		return mcperrors.NewError(
-			mcperrors.CodeMethodNotFound,
-			fmt.Sprintf("Unsupported notification method: %s", notif.Method),
-			mcperrors.CategoryProtocol,
-			mcperrors.SeverityError,
-		).WithContext(&mcperrors.Context{
-			Method:    notif.Method,
-			Component: "BaseTransport",
-			Operation: "handle_notification",
-		})
-	}
-
-	return handler(ctx, notif.Params)
-}
-
-// DefaultTimeout is the default timeout for requests
-const DefaultTimeout = 30 * time.Second
-
-// SafeGo runs a function in a goroutine with panic recovery
-func SafeGo(logger func(format string, args ...interface{}), name string, fn func()) {
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				stackTrace := string(debug.Stack())
-				logger("ERROR: Panic in goroutine %s: %v\nStack trace:\n%s", name, r, stackTrace)
-			}
-		}()
-		fn()
-	}()
-}
-
-// Options contains configuration options for transports
-type Options struct {
-	RequestTimeout time.Duration
-}
-
-// Option is a function that sets an option
-type Option func(*Options)
-
-// WithRequestTimeout sets the request timeout
-func WithRequestTimeout(timeout time.Duration) Option {
-	return func(opts *Options) {
-		opts.RequestTimeout = timeout
-	}
-}
-
-// RegisterProgressHandler registers a handler for progress notifications
-func (t *BaseTransport) RegisterProgressHandler(id interface{}, handler ProgressHandler) {
-	idStr := fmt.Sprintf("%v", id)
-
-	t.Lock()
-	defer t.Unlock()
-	t.progressHandlers[idStr] = handler
-}
-
-// UnregisterProgressHandler removes a progress handler
-func (t *BaseTransport) UnregisterProgressHandler(id interface{}) {
-	idStr := fmt.Sprintf("%v", id)
-
-	t.Lock()
-	defer t.Unlock()
-	delete(t.progressHandlers, idStr)
-}
-
-// GenerateID generates a unique string ID for requests
+// GenerateID generates a unique request ID
 func (t *BaseTransport) GenerateID() string {
-	return fmt.Sprintf("%d", t.GetNextID())
+	return fmt.Sprintf("%s_%d", t.requestIDPrefix, t.GetNextID())
 }
 
-// NewOptions creates default options
-func NewOptions(options ...Option) *Options {
-	opts := &Options{
-		RequestTimeout: DefaultTimeout,
-	}
-
-	for _, option := range options {
-		option(opts)
-	}
-
-	return opts
+// GetRequestIDPrefix returns the prefix used for request IDs
+func (t *BaseTransport) GetRequestIDPrefix() string {
+	return t.requestIDPrefix
 }
 
-// Cleanup cleans up all resources used by BaseTransport
-// This should be called when the transport is no longer needed
+// Cleanup cleans up transport resources
 func (t *BaseTransport) Cleanup() {
 	t.Lock()
 	defer t.Unlock()
 
-	// Close and remove all pending request channels
-	for id, ch := range t.pendingRequests {
-		select {
-		case <-ch:
-			// Channel already has a response, don't close
-		default:
-			close(ch)
-		}
-		delete(t.pendingRequests, id)
+	// Close any pending request channels
+	for _, ch := range t.pendingRequests {
+		close(ch)
 	}
+	t.pendingRequests = make(map[string]chan *protocol.Response)
+}
 
-	// Clear all handler maps
-	for k := range t.requestHandlers {
-		delete(t.requestHandlers, k)
+// DefaultTransportConfig returns a transport configuration with sensible defaults
+func DefaultTransportConfig(transportType TransportType) TransportConfig {
+	return TransportConfig{
+		Type: transportType,
+		Features: FeatureConfig{
+			EnableReliability:   true,
+			EnableObservability: true,
+		},
+		Connection: ConnectionConfig{
+			Timeout:         30 * time.Second,
+			KeepAlive:       30 * time.Second,
+			MaxIdleConns:    100,
+			MaxConnsPerHost: 10,
+			IdleConnTimeout: 90 * time.Second,
+		},
+		Reliability: ReliabilityConfig{
+			MaxRetries:         3,
+			InitialRetryDelay:  1 * time.Second,
+			MaxRetryDelay:      30 * time.Second,
+			RetryBackoffFactor: 2.0,
+			CircuitBreaker: CircuitBreakerConfig{
+				Enabled:          true,
+				FailureThreshold: 5,
+				SuccessThreshold: 2,
+				Timeout:          60 * time.Second,
+			},
+		},
+		Observability: ObservabilityConfig{
+			EnableMetrics: true,
+			EnableLogging: true,
+			LogLevel:      "info",
+			MetricsPrefix: "mcp_transport",
+		},
+		Performance: PerformanceConfig{
+			BufferSize:     8192,
+			FlushInterval:  100 * time.Millisecond,
+			MaxConcurrency: 100,
+			RequestTimeout: 30 * time.Second,
+		},
 	}
-	for k := range t.notificationHandlers {
-		delete(t.notificationHandlers, k)
-	}
-	for k := range t.progressHandlers {
-		delete(t.progressHandlers, k)
-	}
-
-	// Reset ID counter
-	t.nextID = 1
-
-	// Note: We don't set logger to nil as it might be used for final cleanup logs
 }

@@ -22,14 +22,11 @@ var (
 	// NewServer creates a new MCP server
 	NewServer = server.New
 
-	// NewStdioTransport creates a new stdio transport
-	NewStdioTransport = transport.NewStdioTransport
+	// NewTransport creates a new transport using modern config-driven approach
+	NewTransport = transport.NewTransport
 
-	// NewHTTPTransport creates a new HTTP transport
-	NewHTTPTransport = transport.NewHTTPTransport
-
-	// NewStreamableHTTPTransport creates a new Streamable HTTP transport
-	NewStreamableHTTPTransport = transport.NewStreamableHTTPTransport
+	// DefaultTransportConfig creates a default transport configuration
+	DefaultTransportConfig = transport.DefaultTransportConfig
 )
 
 // Protocol constants for capabilities
@@ -111,8 +108,14 @@ var (
 	NewBasePromptsProvider = server.NewBasePromptsProvider
 )
 
-// Transport options
+// Transport types
 var (
-	// WithRequestTimeout sets the request timeout for transports
-	WithRequestTimeout = transport.WithRequestTimeout
+	// TransportTypeStdio represents stdio transport type
+	TransportTypeStdio = transport.TransportTypeStdio
+
+	// TransportTypeStreamableHTTP represents streamable HTTP transport type
+	TransportTypeStreamableHTTP = transport.TransportTypeStreamableHTTP
+
+	// TransportTypeHTTP represents HTTP transport type
+	TransportTypeHTTP = transport.TransportTypeHTTP
 )

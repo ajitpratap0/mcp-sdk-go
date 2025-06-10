@@ -54,10 +54,11 @@ The implementation prioritizes:
 
 ### Transports
 
-- stdio transport (required by spec) with proper line buffering and full JSON-RPC support
-- HTTP with Server-Sent Events (SSE) transport
-- Streamable HTTP transport for enhanced reliability
-- Extensible transport interface for custom implementations
+- **Modern Config-Driven Architecture**: Unified `TransportConfig` approach with feature toggles
+- **stdio transport**: Required by spec with proper line buffering and full JSON-RPC support
+- **Streamable HTTP transport**: Enhanced reliability with connection recovery and session management
+- **Built-in Middleware**: Reliability (retries, circuit breakers) and observability (metrics, logging)
+- **Extensible transport interface**: Clean base for custom implementations
 
 ### Server Features
 
@@ -157,8 +158,12 @@ import (
 )
 
 func main() {
-    // Create transport
-    t := transport.NewStdioTransport()
+    // Create transport using modern config approach
+    config := transport.DefaultTransportConfig(transport.TransportTypeStdio)
+    t, err := transport.NewTransport(config)
+    if err != nil {
+        log.Fatalf("Failed to create transport: %v", err)
+    }
 
     // Create providers
     toolsProvider := server.NewBaseToolsProvider()
@@ -196,6 +201,53 @@ func main() {
     }
 }
 ```
+
+## Transport Configuration
+
+The SDK uses a modern, config-driven approach for creating transports with built-in middleware support:
+
+### Basic Transport Creation
+
+```go
+// Create stdio transport (recommended by MCP spec)
+config := transport.DefaultTransportConfig(transport.TransportTypeStdio)
+stdioTransport, err := transport.NewTransport(config)
+
+// Create HTTP transport with custom endpoint
+config := transport.DefaultTransportConfig(transport.TransportTypeStreamableHTTP)
+config.Endpoint = "https://api.example.com/mcp"
+httpTransport, err := transport.NewTransport(config)
+```
+
+### Advanced Configuration
+
+```go
+// Configure transport with reliability and observability features
+config := transport.DefaultTransportConfig(transport.TransportTypeStreamableHTTP)
+config.Endpoint = "https://api.example.com/mcp"
+
+// Enable reliability features (retries, circuit breakers)
+config.Features.EnableReliability = true
+config.Reliability.MaxRetries = 3
+config.Reliability.InitialRetryDelay = 1 * time.Second
+
+// Enable observability features (metrics, logging)
+config.Features.EnableObservability = true
+config.Observability.EnableMetrics = true
+config.Observability.EnableLogging = true
+
+// Configure performance settings
+config.Performance.RequestTimeout = 30 * time.Second
+config.Performance.MaxConcurrency = 10
+
+transport, err := transport.NewTransport(config)
+```
+
+### Transport Types
+
+- **`TransportTypeStdio`**: Standard input/output transport (required by MCP spec)
+- **`TransportTypeStreamableHTTP`**: Enhanced HTTP transport with SSE support and reliability features
+- **`TransportTypeHTTP`**: Basic HTTP transport (uses StreamableHTTP internally)
 
 ## Examples
 

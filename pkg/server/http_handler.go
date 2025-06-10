@@ -3,6 +3,8 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -25,14 +27,19 @@ type HTTPHandler struct {
 	sessionMu       sync.RWMutex
 	sseConnections  map[string]*SSEConnection
 	sseConnectionMu sync.RWMutex
+	sessionTimeout  time.Duration // Default session timeout
+	cleanupTicker   *time.Ticker  // For automatic session cleanup
+	cleanupStop     chan struct{} // Signal to stop cleanup routine
 }
 
 // SessionInfo tracks information about a client session
 type SessionInfo struct {
-	ID          string
-	CreatedAt   time.Time
-	LastUsedAt  time.Time
-	LastEventID string
+	ID            string
+	CreatedAt     time.Time
+	LastUsedAt    time.Time
+	ExpiresAt     time.Time
+	LastEventID   string
+	RotationCount int // Number of times session ID has been rotated
 }
 
 // SSEConnection represents an active SSE connection
@@ -47,18 +54,238 @@ type SSEConnection struct {
 
 // NewHTTPHandler creates a new HTTP handler
 func NewHTTPHandler() *HTTPHandler {
-	return &HTTPHandler{
-		allowedOrigins: []string{"*"}, // Default to allow all origins, but this should be restricted in production
+	h := &HTTPHandler{
+		allowedOrigins: []string{"http://localhost", "https://localhost"}, // Secure defaults per MCP spec
+		sessions:       make(map[string]*SessionInfo),
+		sseConnections: make(map[string]*SSEConnection),
+		sessionTimeout: 24 * time.Hour, // Default 24-hour session timeout
+		cleanupStop:    make(chan struct{}),
 	}
+
+	// Start automatic session cleanup routine
+	h.startSessionCleanup()
+
+	return h
 }
 
 // NewStreamableHTTPHandler creates a new streamable HTTP handler with SSE support
 func NewStreamableHTTPHandler() *HTTPHandler {
-	return &HTTPHandler{
-		allowedOrigins: []string{"*"}, // Default to allow all origins, but this should be restricted in production
+	h := &HTTPHandler{
+		allowedOrigins: []string{"http://localhost", "https://localhost"}, // Secure defaults per MCP spec
 		sessions:       make(map[string]*SessionInfo),
 		sseConnections: make(map[string]*SSEConnection),
+		sessionTimeout: 24 * time.Hour, // Default 24-hour session timeout
+		cleanupStop:    make(chan struct{}),
 	}
+
+	// Start automatic session cleanup routine
+	h.startSessionCleanup()
+
+	return h
+}
+
+// generateSecureSessionID creates a cryptographically secure session ID
+// per MCP specification requirements using crypto/rand
+func (h *HTTPHandler) generateSecureSessionID() (string, error) {
+	// Generate 32 bytes (256 bits) of random data for high entropy
+	bytes := make([]byte, 32)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", fmt.Errorf("failed to generate secure session ID: %w", err)
+	}
+
+	// Encode as hexadecimal string (64 characters)
+	sessionID := hex.EncodeToString(bytes)
+
+	// Add session prefix for easier identification and debugging
+	return fmt.Sprintf("mcp_session_%s", sessionID), nil
+}
+
+// createSession creates a new session with secure ID and proper expiration
+func (h *HTTPHandler) createSession() (*SessionInfo, error) {
+	sessionID, err := h.generateSecureSessionID()
+	if err != nil {
+		return nil, err
+	}
+
+	now := time.Now()
+	session := &SessionInfo{
+		ID:            sessionID,
+		CreatedAt:     now,
+		LastUsedAt:    now,
+		ExpiresAt:     now.Add(h.sessionTimeout),
+		RotationCount: 0,
+	}
+
+	h.sessionMu.Lock()
+	h.sessions[sessionID] = session
+	h.sessionMu.Unlock()
+
+	log.Printf("[HTTPHandler] Created secure session: %s (expires: %v)", sessionID, session.ExpiresAt)
+	return session, nil
+}
+
+// isSessionValid checks if a session exists and is not expired
+func (h *HTTPHandler) isSessionValid(sessionID string) (*SessionInfo, bool) {
+	h.sessionMu.RLock()
+	session, exists := h.sessions[sessionID]
+	h.sessionMu.RUnlock()
+
+	if !exists {
+		return nil, false
+	}
+
+	// Check if session has expired
+	if time.Now().After(session.ExpiresAt) {
+		// Session expired, remove it
+		h.sessionMu.Lock()
+		delete(h.sessions, sessionID)
+		h.sessionMu.Unlock()
+		log.Printf("[HTTPHandler] Session expired and removed: %s", sessionID)
+		return nil, false
+	}
+
+	return session, true
+}
+
+// updateSessionLastUsed updates the session's last used time and extends expiration
+func (h *HTTPHandler) updateSessionLastUsed(sessionID string) {
+	h.sessionMu.Lock()
+	defer h.sessionMu.Unlock()
+
+	if session, exists := h.sessions[sessionID]; exists {
+		now := time.Now()
+		session.LastUsedAt = now
+		// Extend session expiration on activity
+		session.ExpiresAt = now.Add(h.sessionTimeout)
+	}
+}
+
+// rotateSessionID creates a new session ID for an existing session (session rotation)
+func (h *HTTPHandler) rotateSessionID(oldSessionID string) (string, error) {
+	h.sessionMu.Lock()
+	defer h.sessionMu.Unlock()
+
+	oldSession, exists := h.sessions[oldSessionID]
+	if !exists {
+		return "", fmt.Errorf("session not found for rotation: %s", oldSessionID)
+	}
+
+	// Generate new secure session ID
+	newSessionID, err := h.generateSecureSessionID()
+	if err != nil {
+		return "", err
+	}
+
+	// Create new session with rotated ID
+	now := time.Now()
+	newSession := &SessionInfo{
+		ID:            newSessionID,
+		CreatedAt:     oldSession.CreatedAt, // Keep original creation time
+		LastUsedAt:    now,
+		ExpiresAt:     now.Add(h.sessionTimeout),
+		LastEventID:   oldSession.LastEventID, // Preserve event ID
+		RotationCount: oldSession.RotationCount + 1,
+	}
+
+	// Replace old session with new one
+	delete(h.sessions, oldSessionID)
+	h.sessions[newSessionID] = newSession
+
+	log.Printf("[HTTPHandler] Rotated session ID: %s -> %s (rotation #%d)",
+		oldSessionID, newSessionID, newSession.RotationCount)
+
+	return newSessionID, nil
+}
+
+// startSessionCleanup starts a background goroutine for automatic session cleanup
+func (h *HTTPHandler) startSessionCleanup() {
+	// Run cleanup every hour
+	h.cleanupTicker = time.NewTicker(1 * time.Hour)
+
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[HTTPHandler] Panic in session cleanup routine: %v", r)
+			}
+		}()
+
+		for {
+			select {
+			case <-h.cleanupTicker.C:
+				h.cleanupExpiredSessions()
+			case <-h.cleanupStop:
+				h.cleanupTicker.Stop()
+				return
+			}
+		}
+	}()
+
+	log.Printf("[HTTPHandler] Started automatic session cleanup routine")
+}
+
+// cleanupExpiredSessions removes expired sessions from memory
+func (h *HTTPHandler) cleanupExpiredSessions() {
+	h.sessionMu.Lock()
+	defer h.sessionMu.Unlock()
+
+	now := time.Now()
+	expiredSessions := make([]string, 0)
+
+	// Find expired sessions
+	for sessionID, session := range h.sessions {
+		if now.After(session.ExpiresAt) {
+			expiredSessions = append(expiredSessions, sessionID)
+		}
+	}
+
+	// Remove expired sessions
+	for _, sessionID := range expiredSessions {
+		delete(h.sessions, sessionID)
+
+		// Also close any SSE connections for this session
+		h.sseConnectionMu.Lock()
+		for connID, conn := range h.sseConnections {
+			if conn.sessionID == sessionID {
+				close(conn.closeCh)
+				delete(h.sseConnections, connID)
+			}
+		}
+		h.sseConnectionMu.Unlock()
+	}
+
+	if len(expiredSessions) > 0 {
+		log.Printf("[HTTPHandler] Cleaned up %d expired sessions", len(expiredSessions))
+	}
+}
+
+// stopSessionCleanup stops the background session cleanup routine
+func (h *HTTPHandler) stopSessionCleanup() {
+	if h.cleanupStop != nil {
+		close(h.cleanupStop)
+		log.Printf("[HTTPHandler] Stopped automatic session cleanup routine")
+	}
+}
+
+// SetSessionTimeout allows customizing the session timeout duration
+func (h *HTTPHandler) SetSessionTimeout(timeout time.Duration) {
+	h.sessionMu.Lock()
+	defer h.sessionMu.Unlock()
+	h.sessionTimeout = timeout
+	log.Printf("[HTTPHandler] Session timeout set to: %v", timeout)
+}
+
+// GetSessionTimeout returns the current session timeout duration
+func (h *HTTPHandler) GetSessionTimeout() time.Duration {
+	h.sessionMu.RLock()
+	defer h.sessionMu.RUnlock()
+	return h.sessionTimeout
+}
+
+// GetSessionCount returns the current number of active sessions
+func (h *HTTPHandler) GetSessionCount() int {
+	h.sessionMu.RLock()
+	defer h.sessionMu.RUnlock()
+	return len(h.sessions)
 }
 
 // ServeHTTP handles HTTP requests
@@ -73,11 +300,9 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Check for session ID and validate if present
 	sessionID := r.Header.Get("MCP-Session-ID")
 	if sessionID != "" {
-		h.sessionMu.RLock()
-		session, exists := h.sessions[sessionID]
-		h.sessionMu.RUnlock()
+		_, isValid := h.isSessionValid(sessionID)
 
-		if !exists {
+		if !isValid {
 			// Session doesn't exist or has expired, but only return error for:
 			// 1. POST requests that are not initialize
 			// 2. DELETE requests
@@ -111,10 +336,8 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		} else {
-			// Update last used time
-			h.sessionMu.Lock()
-			session.LastUsedAt = time.Now()
-			h.sessionMu.Unlock()
+			// Update last used time and extend session expiration
+			h.updateSessionLastUsed(sessionID)
 		}
 	}
 
@@ -173,21 +396,19 @@ func (h *HTTPHandler) handlePostRequest(w http.ResponseWriter, r *http.Request) 
 		// Check if this is an initialize request, which may create a new session
 		newSessionCreated := false
 		if req.Method == protocol.MethodInitialize && sessionID == "" {
-			// Generate a new session ID for initialize requests without a session ID
-			sessionID = fmt.Sprintf("session-%d", time.Now().UnixNano())
-
-			// Create a new session
-			h.sessionMu.Lock()
-			h.sessions[sessionID] = &SessionInfo{
-				ID:         sessionID,
-				CreatedAt:  time.Now(),
-				LastUsedAt: time.Now(),
+			// Create a new secure session for initialize requests without a session ID
+			session, err := h.createSession()
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				fmt.Fprintf(w, "Failed to create secure session: %v", err)
+				return
 			}
-			h.sessionMu.Unlock()
+
+			sessionID = session.ID
 
 			// Set the session ID in the response header
 			w.Header().Set("MCP-Session-ID", sessionID)
-			fmt.Printf("[DEBUG] Created new session ID: %s\n", sessionID)
+			fmt.Printf("[DEBUG] Created new secure session ID: %s\n", sessionID)
 			fmt.Printf("[DEBUG] Set MCP-Session-ID header: %s\n", w.Header().Get("MCP-Session-ID"))
 			newSessionCreated = true
 		}
@@ -556,14 +777,12 @@ func (h *HTTPHandler) handleDeleteRequest(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Check if the session exists
-	h.sessionMu.RLock()
-	_, exists := h.sessions[sessionID]
-	h.sessionMu.RUnlock()
+	// Check if the session exists and is valid
+	_, isValid := h.isSessionValid(sessionID)
 
-	if !exists {
+	if !isValid {
 		w.WriteHeader(http.StatusNotFound)
-		fmt.Fprintf(w, "Session not found")
+		fmt.Fprintf(w, "Session not found or expired")
 		return
 	}
 
@@ -605,16 +824,17 @@ func (h *HTTPHandler) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 
 	// Only validate the session ID if one was provided
 	if sessionID != "" {
-		h.sessionMu.RLock()
-		_, exists := h.sessions[sessionID]
-		h.sessionMu.RUnlock()
+		_, isValid := h.isSessionValid(sessionID)
 
-		if !exists {
+		if !isValid {
 			// Session doesn't exist or has expired
 			w.WriteHeader(http.StatusNotFound)
 			fmt.Fprintf(w, "Session not found or expired")
 			return
 		}
+
+		// Update session activity
+		h.updateSessionLastUsed(sessionID)
 	} else if r.Header.Get("Last-Event-ID") != "" {
 		// If trying to resume without a session ID
 		w.WriteHeader(http.StatusBadRequest)
@@ -695,25 +915,105 @@ func (h *HTTPHandler) AddAllowedOrigin(origin string) {
 	h.allowedOrigins = append(h.allowedOrigins, origin)
 }
 
-// isOriginAllowed checks if the given origin is allowed
+// isOriginAllowed checks if the given origin is allowed per MCP specification
 func (h *HTTPHandler) isOriginAllowed(origin string) bool {
+	// Per MCP specification, servers MUST validate Origin headers for security
+	// Empty origins are only allowed for localhost connections
 	if origin == "" {
-		// Some clients may not send an Origin header
-		// Server implementers should decide if they want to allow this
-		return true
+		// For security, we only allow empty Origin headers from localhost connections
+		// This should be further validated by checking the actual client IP
+		// For now, we return false to be secure by default
+		return false
 	}
 
 	h.mu.RLock()
 	origins := h.allowedOrigins
 	h.mu.RUnlock()
 
+	// Check against allowed origins
 	for _, allowed := range origins {
-		if allowed == "*" || allowed == origin {
+		if allowed == "*" {
+			// Wildcard is only allowed if explicitly set (not recommended for production)
+			return true
+		}
+		if h.matchOrigin(allowed, origin) {
 			return true
 		}
 	}
 
 	return false
+}
+
+// matchOrigin performs origin matching with support for localhost patterns
+func (h *HTTPHandler) matchOrigin(allowed, origin string) bool {
+	// Exact match
+	if allowed == origin {
+		return true
+	}
+
+	// Special handling for localhost per MCP specification
+	if h.isLocalhostPattern(allowed) && h.isLocalhostOrigin(origin) {
+		return true
+	}
+
+	return false
+}
+
+// isLocalhostPattern checks if the allowed origin is a localhost pattern
+func (h *HTTPHandler) isLocalhostPattern(allowed string) bool {
+	return allowed == "http://localhost" || allowed == "https://localhost" ||
+		allowed == "http://127.0.0.1" || allowed == "https://127.0.0.1" ||
+		allowed == "http://::1" || allowed == "https://::1"
+}
+
+// isLocalhostOrigin checks if the origin is from localhost
+func (h *HTTPHandler) isLocalhostOrigin(origin string) bool {
+	// Check for various localhost representations
+	localhostPatterns := []string{
+		"http://localhost",
+		"https://localhost",
+		"http://127.0.0.1",
+		"https://127.0.0.1",
+		"http://::1",
+		"https://::1",
+	}
+
+	for _, pattern := range localhostPatterns {
+		if origin == pattern {
+			return true
+		}
+		// Also check for localhost with ports
+		if strings.HasPrefix(origin, pattern+":") {
+			return true
+		}
+	}
+
+	return false
+}
+
+// SetAllowWildcardOrigin allows wildcard origins (use with caution)
+func (h *HTTPHandler) SetAllowWildcardOrigin(allow bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if allow {
+		// Add wildcard if not present
+		for _, origin := range h.allowedOrigins {
+			if origin == "*" {
+				return // Already present
+			}
+		}
+		h.allowedOrigins = append(h.allowedOrigins, "*")
+	} else {
+		// Remove wildcard
+		newOrigins := make([]string, 0, len(h.allowedOrigins))
+		for _, origin := range h.allowedOrigins {
+			if origin != "*" {
+				newOrigins = append(newOrigins, origin)
+			}
+		}
+		h.allowedOrigins = newOrigins
+	}
 }
 
 // BroadcastNotification sends a notification to all connected SSE clients

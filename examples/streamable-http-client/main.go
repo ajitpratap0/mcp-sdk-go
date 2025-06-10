@@ -38,8 +38,21 @@ func main() {
 		cancel()
 	}()
 
-	// Create a streamable HTTP transport for connecting to the server with a longer timeout
-	t := transport.NewStreamableHTTPTransport(serverURL, transport.WithRequestTimeout(2*time.Minute))
+	// Create a streamable HTTP transport using modern config approach
+	config := transport.DefaultTransportConfig(transport.TransportTypeStreamableHTTP)
+	config.Endpoint = serverURL
+	config.Performance.RequestTimeout = 2 * time.Minute
+
+	baseTransport, err := transport.NewTransport(config)
+	if err != nil {
+		log.Fatalf("Failed to create transport: %v", err)
+	}
+
+	// Cast to StreamableHTTPTransport to access specific methods
+	t, ok := baseTransport.(*transport.StreamableHTTPTransport)
+	if !ok {
+		log.Fatal("Expected StreamableHTTPTransport")
+	}
 
 	// Set custom headers if needed
 	t.SetHeader("User-Agent", "MCP-Streamable-Client/1.0")

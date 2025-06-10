@@ -18,15 +18,18 @@ import (
 
 // MockHTTPServer provides a configurable HTTP server for testing
 type MockHTTPServer struct {
-	server        *httptest.Server
-	mu            sync.Mutex
-	requests      [][]byte
-	responses     map[string]*MockResponse
-	sseMessages   []string
-	sseDelay      time.Duration
-	responseDelay time.Duration
-	errorOnNth    int
-	requestCount  int
+	server           *httptest.Server
+	mu               sync.Mutex
+	requests         [][]byte
+	responses        map[string]*MockResponse
+	sseMessages      []string
+	sseDelay         time.Duration
+	responseDelay    time.Duration
+	errorOnNth       int
+	requestCount     int
+	shouldFail       bool
+	failureCount     int
+	connectionClosed bool
 }
 
 // MockResponse represents a configurable HTTP response
@@ -54,9 +57,43 @@ func (m *MockHTTPServer) handler(w http.ResponseWriter, r *http.Request) {
 	m.mu.Lock()
 	m.requestCount++
 	currentCount := m.requestCount
+	shouldFail := m.shouldFail
+	failureCount := m.failureCount
+	connectionClosed := m.connectionClosed
 	m.mu.Unlock()
 
-	// Simulate errors
+	// Simulate connection closed
+	if connectionClosed {
+		// Hijack connection and close it to simulate connection closed
+		if hj, ok := w.(http.Hijacker); ok {
+			conn, _, err := hj.Hijack()
+			if err == nil {
+				_ = conn.Close() // Ignore error on forced close
+				return
+			}
+		}
+		// Fallback if hijacking fails
+		w.WriteHeader(http.StatusBadGateway)
+		return
+	}
+
+	// Simulate failures based on failure count
+	if shouldFail && failureCount > 0 {
+		m.mu.Lock()
+		m.failureCount--
+		m.mu.Unlock()
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	// Turn off shouldFail after failure count is exhausted
+	if shouldFail && failureCount <= 0 {
+		m.mu.Lock()
+		m.shouldFail = false
+		m.mu.Unlock()
+	}
+
+	// Simulate errors (legacy)
 	if m.errorOnNth > 0 && currentCount == m.errorOnNth {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
@@ -173,6 +210,48 @@ func (m *MockHTTPServer) URL() string {
 // Close shuts down the server
 func (m *MockHTTPServer) Close() {
 	m.server.Close()
+}
+
+// GetRequestCount returns the number of requests received
+func (m *MockHTTPServer) GetRequestCount() int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return int64(m.requestCount)
+}
+
+// ResetRequestCount resets the request counter to zero
+func (m *MockHTTPServer) ResetRequestCount() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.requestCount = 0
+}
+
+// SetShouldFail configures whether the server should return errors
+func (m *MockHTTPServer) SetShouldFail(shouldFail bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.shouldFail = shouldFail
+}
+
+// SetFailureCount sets how many requests should fail before succeeding
+func (m *MockHTTPServer) SetFailureCount(count int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.failureCount = count
+}
+
+// SetConnectionClosed simulates connection closed scenarios
+func (m *MockHTTPServer) SetConnectionClosed(closed bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.connectionClosed = closed
+}
+
+// SetResponseDelay sets the delay before sending responses
+func (m *MockHTTPServer) SetResponseDelay(delay time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.responseDelay = delay
 }
 
 // MockReadWriteCloser implements io.ReadWriteCloser for testing

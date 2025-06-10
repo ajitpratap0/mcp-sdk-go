@@ -111,12 +111,11 @@ tmp/
 temp/
 
 # LLM-related and analysis documents
-PLAN.md
 *_ANALYSIS.md
 *_analysis.md
-*_plan.md
-*_PLAN.md
-CLAUDE.md
+# *_plan.md
+# *_PLAN.md
+# CLAUDE.md
 typescript-sdk-analysis.md
 pkg/transport/test_implementation_plan.md
 pkg/transport/test_coverage_*.md

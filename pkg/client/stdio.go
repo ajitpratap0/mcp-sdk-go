@@ -10,7 +10,11 @@ import (
 // NewStdioClient creates a new client that communicates over stdin/stdout.
 // According to the MCP specification, clients should support stdio whenever possible.
 func NewStdioClient(options ...ClientOption) *ClientConfig {
-	t := transport.NewStdioTransportWithStdInOut()
+	config := transport.DefaultTransportConfig(transport.TransportTypeStdio)
+	t, err := transport.NewTransport(config)
+	if err != nil {
+		panic(err) // This should not happen with default config
+	}
 
 	// Apply default options
 	defaultOptions := []ClientOption{
@@ -34,8 +38,13 @@ func NewStdioClient(options ...ClientOption) *ClientConfig {
 // NewStdioClientWithStreams creates a new client that communicates over the provided
 // reader/writer streams instead of stdin/stdout.
 func NewStdioClientWithStreams(reader, writer *os.File, options ...ClientOption) *ClientConfig {
-	// TODO: Implement NewStdioTransportWithStreams in the transport package
-	t := transport.NewStdioTransportWithStdInOut() // Placeholder until proper implementation
+	config := transport.DefaultTransportConfig(transport.TransportTypeStdio)
+	config.StdioReader = reader
+	config.StdioWriter = writer
+	t, err := transport.NewTransport(config)
+	if err != nil {
+		panic(err) // This should not happen with default config
+	}
 
 	// Apply default options
 	defaultOptions := []ClientOption{

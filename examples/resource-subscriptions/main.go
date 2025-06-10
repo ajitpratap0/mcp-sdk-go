@@ -109,8 +109,12 @@ func extractFileName(uri string) string {
 }
 
 func main() {
-	// Create stdio transport
-	stdioTransport := transport.NewStdioTransportWithStdInOut()
+	// Create stdio transport using modern config approach
+	config := transport.DefaultTransportConfig(transport.TransportTypeStdio)
+	stdioTransport, err := transport.NewTransport(config)
+	if err != nil {
+		log.Fatalf("Failed to create transport: %v", err)
+	}
 
 	// Create file system provider
 	fsProvider := NewFileSystemResourcesProvider()

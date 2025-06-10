@@ -20,7 +20,12 @@ func TestStdioTransportGoroutineLeak(t *testing.T) {
 	// Create and start transport
 	inReader, inWriter := io.Pipe()
 	outReader, outWriter := io.Pipe()
-	transport := NewStdioTransport(inReader, outWriter)
+	config := DefaultTransportConfig(TransportTypeStdio)
+	config.StdioReader = inReader
+	config.StdioWriter = outWriter
+	config.Features.EnableReliability = false   // Disable for test
+	config.Features.EnableObservability = false // Disable for test
+	transport, _ := NewTransport(config)
 	defer inWriter.Close()
 	defer outReader.Close()
 
@@ -76,8 +81,12 @@ func TestHTTPTransportGoroutineLeak(t *testing.T) {
 		SetStabilizeDelay(500 * time.Millisecond)
 	detector.Start()
 
-	// Create transport
-	transport := NewHTTPTransport("http://localhost:9999/test") // Non-existent server
+	// Create transport using StreamableHTTPTransport
+	config := DefaultTransportConfig(TransportTypeStreamableHTTP)
+	config.Endpoint = "http://localhost:9999/test"
+	config.Features.EnableReliability = false   // Disable for test
+	config.Features.EnableObservability = false // Disable for test
+	transport, _ := NewTransport(config)        // Non-existent server
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
@@ -105,7 +114,11 @@ func TestStreamableHTTPTransportGoroutineLeak(t *testing.T) {
 	detector.Start()
 
 	// Create transport
-	transport := NewStreamableHTTPTransport("http://localhost:9999/test") // Non-existent server
+	config := DefaultTransportConfig(TransportTypeStreamableHTTP)
+	config.Endpoint = "http://localhost:9999/test"
+	config.Features.EnableReliability = false   // Disable for test
+	config.Features.EnableObservability = false // Disable for test
+	transport, _ := NewTransport(config)        // Non-existent server
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
@@ -182,7 +195,12 @@ func TestTransportStartStopCycle(t *testing.T) {
 
 	inReader, inWriter := io.Pipe()
 	outReader, outWriter := io.Pipe()
-	transport := NewStdioTransport(inReader, outWriter)
+	config := DefaultTransportConfig(TransportTypeStdio)
+	config.StdioReader = inReader
+	config.StdioWriter = outWriter
+	config.Features.EnableReliability = false   // Disable for test
+	config.Features.EnableObservability = false // Disable for test
+	transport, _ := NewTransport(config)
 	defer inWriter.Close()
 	defer outReader.Close()
 

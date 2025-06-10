@@ -16,6 +16,7 @@ func TestExamplesCompile(t *testing.T) {
 
 	// List of example directories to test
 	exampleDirs := []string{
+		"middleware-example",
 		"pagination-example",
 		"simple-client",
 		"simple-server",

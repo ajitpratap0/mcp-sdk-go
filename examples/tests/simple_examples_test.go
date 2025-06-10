@@ -91,24 +91,19 @@ func verifySimpleClientCode(t *testing.T, code string) {
 
 // verifySimpleServerCode checks that the server code properly implements MCP functionality
 func verifySimpleServerCode(t *testing.T, code string) {
-	// Check for server initialization
-	if !strings.Contains(code, "server.New") {
+	// Check for server initialization - now using shared factory
+	if !strings.Contains(code, "shared.CreateStdioServer") && !strings.Contains(code, "server.New") {
 		t.Error("Server is missing MCP server initialization")
 	}
 
-	// Check for capability declaration
-	if !strings.Contains(code, "WithCapability") && !strings.Contains(code, "Capability") {
-		t.Error("Server doesn't declare capabilities")
+	// Since the server is using shared factory, check for shared imports
+	if !strings.Contains(code, "shared") {
+		t.Error("Server doesn't import shared package")
 	}
 
-	// Check for resources functionality
-	if !strings.Contains(code, "Resource") {
-		t.Error("Server is missing resources functionality")
-	}
-
-	// Check for tools functionality
-	if !strings.Contains(code, "Tool") {
-		t.Error("Server is missing tools functionality")
+	// Check for Start method
+	if !strings.Contains(code, "Start") {
+		t.Error("Server doesn't call Start method")
 	}
 
 	// Check for HTTP transport

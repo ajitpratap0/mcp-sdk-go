@@ -100,6 +100,56 @@ func (m *mockTransport) SetErrorHandler(handler transport.ErrorHandler) {
 	// No-op for mock
 }
 
+// HandleResponse implements the transport.Transport interface
+func (m *mockTransport) HandleResponse(response *protocol.Response) {
+	// No-op for mock
+}
+
+// HandleRequest implements the transport.Transport interface
+func (m *mockTransport) HandleRequest(ctx context.Context, request *protocol.Request) (*protocol.Response, error) {
+	if handler, ok := m.requestHandlers[request.Method]; ok {
+		result, err := handler(ctx, request.Params)
+		if err != nil {
+			return nil, err
+		}
+		return protocol.NewResponse(request.ID, result)
+	}
+	return nil, errors.New("method not found")
+}
+
+// HandleNotification implements the transport.Transport interface
+func (m *mockTransport) HandleNotification(ctx context.Context, notification *protocol.Notification) error {
+	if handler, ok := m.notificationHandlers[notification.Method]; ok {
+		return handler(ctx, notification.Params)
+	}
+	return errors.New("notification handler not found")
+}
+
+// GetRequestIDPrefix implements the transport.Transport interface
+func (m *mockTransport) GetRequestIDPrefix() string {
+	return "test"
+}
+
+// GetNextID implements the transport.Transport interface
+func (m *mockTransport) GetNextID() int64 {
+	return 1
+}
+
+// Cleanup implements the transport.Transport interface
+func (m *mockTransport) Cleanup() {
+	// No-op for mock
+}
+
+// Lock implements the transport.Transport interface
+func (m *mockTransport) Lock() {
+	// No-op for mock
+}
+
+// Unlock implements the transport.Transport interface
+func (m *mockTransport) Unlock() {
+	// No-op for mock
+}
+
 // Custom mock implementations for providers
 
 // TestServerConcurrentInitialize tests that concurrent initialization is safe

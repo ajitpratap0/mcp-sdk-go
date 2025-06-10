@@ -228,3 +228,13 @@ type PaginationResult struct {
 	NextCursor string        `json:"nextCursor,omitempty"`
 	HasMore    bool          `json:"hasMore"`
 }
+
+// BatchRequest represents a batch of multiple requests
+type BatchRequest struct {
+	Requests []Request `json:"requests"`
+}
+
+// BatchResponse represents responses for a batch of requests
+type BatchResponse struct {
+	Responses []Response `json:"responses"`
+}

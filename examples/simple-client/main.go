@@ -28,11 +28,12 @@ func main() {
 		cancel()
 	}()
 
-	// Create a stdio transport for connecting to the server
-
-	// Initialize StdioTransport using the new helper for default stdio
-	// t := transport.NewStdioTransport()
-	t := transport.NewStdioTransportWithStdInOut()
+	// Create a stdio transport for connecting to the server using modern config approach
+	config := transport.DefaultTransportConfig(transport.TransportTypeStdio)
+	t, err := transport.NewTransport(config)
+	if err != nil {
+		log.Fatalf("Failed to create transport: %v", err)
+	}
 
 	// Create client with needed capabilities
 	c := client.New(t,

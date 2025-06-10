@@ -114,6 +114,7 @@ func TestHTTPHandlerGoroutineLeak(t *testing.T) {
 
 	// Create handler and mock transport
 	handler := NewHTTPHandler()
+	defer handler.stopSessionCleanup() // Stop cleanup goroutine to prevent leak
 	mockTransport := NewMockTransportForLeakTest()
 	handler.SetTransport(mockTransport)
 
@@ -145,6 +146,7 @@ func TestStreamableHTTPHandlerGoroutineLeak(t *testing.T) {
 
 	// Create handler and mock transport
 	handler := NewStreamableHTTPHandler()
+	defer handler.stopSessionCleanup() // Stop cleanup goroutine to prevent leak
 	mockTransport := NewMockTransportForLeakTest()
 	handler.SetTransport(mockTransport)
 

@@ -12,9 +12,10 @@ import (
 	"runtime/debug"
 	"sync"
 
+	"golang.org/x/sync/errgroup"
+
 	mcperrors "github.com/ajitpratap0/mcp-sdk-go/pkg/errors"
 	"github.com/ajitpratap0/mcp-sdk-go/pkg/protocol"
-	"golang.org/x/sync/errgroup"
 )
 
 // StdioTransport implements the Transport interface using standard input and output.
@@ -31,21 +32,26 @@ type StdioTransport struct {
 	stopOnce       sync.Once // Ensures Stop logic runs once
 }
 
-// NewStdioTransport creates a new transport that uses the provided reader and writer.
-// This constructor is suitable for testing or custom pipe configurations.
-func NewStdioTransport(r io.Reader, w io.Writer) *StdioTransport {
+// newStdioTransport creates a new Stdio transport from config
+func newStdioTransport(config TransportConfig) (Transport, error) {
+	// Use custom readers/writers if provided (for testing), otherwise use os.Stdin/Stdout
+	reader := config.StdioReader
+	writer := config.StdioWriter
+
+	if reader == nil {
+		reader = os.Stdin
+	}
+	if writer == nil {
+		writer = os.Stdout
+	}
+
 	return &StdioTransport{
 		BaseTransport: NewBaseTransport(),
-		reader:        r,
-		writer:        w,
-		rawWriter:     bufio.NewWriter(w),
+		reader:        reader,
+		writer:        writer,
+		rawWriter:     bufio.NewWriter(writer),
 		done:          make(chan struct{}),
-	}
-}
-
-// NewStdioTransportWithStdInOut creates a new transport that uses standard input and output.
-func NewStdioTransportWithStdInOut() *StdioTransport {
-	return NewStdioTransport(os.Stdin, os.Stdout)
+	}, nil
 }
 
 // Initialize prepares the transport for use.
@@ -115,13 +121,13 @@ func (t *StdioTransport) Start(ctx context.Context) error {
 		case <-gctx.Done():
 			// Close the reader to unblock scanner.Scan()
 			if closer, ok := t.reader.(io.Closer); ok {
-				closer.Close()
+				_ = closer.Close() // Ignore error on forced close
 			}
 			return gctx.Err()
 		case <-t.done:
 			// Close the reader to unblock scanner.Scan()
 			if closer, ok := t.reader.(io.Closer); ok {
-				closer.Close()
+				_ = closer.Close() // Ignore error on forced close
 			}
 			return nil
 		case <-scannerDone:

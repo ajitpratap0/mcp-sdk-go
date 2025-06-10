@@ -307,10 +307,11 @@ func TestHandleNotification(t *testing.T) {
 	}
 }
 
-func TestWithRequestTimeout(t *testing.T) {
-	opts := NewOptions(WithRequestTimeout(5 * time.Second))
+func TestTransportConfigRequestTimeout(t *testing.T) {
+	config := DefaultTransportConfig(TransportTypeStreamableHTTP)
+	config.Performance.RequestTimeout = 5 * time.Second
 
-	if opts.RequestTimeout != 5*time.Second {
-		t.Errorf("Expected RequestTimeout to be 5s, got %v", opts.RequestTimeout)
+	if config.Performance.RequestTimeout != 5*time.Second {
+		t.Errorf("Expected RequestTimeout to be 5s, got %v", config.Performance.RequestTimeout)
 	}
 }

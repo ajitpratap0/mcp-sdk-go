@@ -26,13 +26,22 @@ func main() {
 		cancel()
 	}()
 
-	// Create HTTP transport (or use client.NewStdioClient() for stdio transport)
+	// Create HTTP transport using modern config approach
 	serverURL := "http://localhost:8080"
 	if len(os.Args) > 1 {
 		serverURL = os.Args[1]
 	}
 
-	t := transport.NewHTTPTransport(serverURL)
+	// Create transport with reliability features enabled
+	config := transport.DefaultTransportConfig(transport.TransportTypeStreamableHTTP)
+	config.Endpoint = serverURL
+	config.Features.EnableReliability = true
+	config.Reliability.MaxRetries = 5
+
+	t, err := transport.NewTransport(config)
+	if err != nil {
+		log.Fatalf("Failed to create transport: %v", err)
+	}
 
 	// Create client with pagination capability
 	c := client.New(t,

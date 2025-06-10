@@ -21,9 +21,21 @@ import (
 func TestNewStdioTransport(t *testing.T) {
 	reader := strings.NewReader("")
 	writer := &bytes.Buffer{}
-	tr := NewStdioTransport(reader, writer)
 
-	assert.NotNil(t, tr, "NewStdioTransport should return a non-nil transport")
+	config := DefaultTransportConfig(TransportTypeStdio)
+	config.StdioReader = reader
+	config.StdioWriter = writer
+	config.Features.EnableReliability = false   // Disable for test
+	config.Features.EnableObservability = false // Disable for test
+	baseTransport, _ := NewTransport(config)
+
+	// Cast to StdioTransport to access specific fields
+	tr, ok := baseTransport.(*StdioTransport)
+	if !ok {
+		t.Fatal("Expected StdioTransport")
+	}
+
+	assert.NotNil(t, tr, "NewTransport should return a non-nil transport")
 	assert.Equal(t, reader, tr.reader, "Reader should be initialized")
 	assert.Equal(t, writer, tr.writer, "Writer should be initialized")
 	assert.NotNil(t, tr.rawWriter, "rawWriter should be initialized")
@@ -35,8 +47,19 @@ func TestStdioTransport_SendRawBytes(t *testing.T) {
 	outR, outW := io.Pipe() // Transport's output is written to outW, read from outR
 
 	t.Log("TestStdioTransport_SendRawBytes: Creating StdioTransport")
-	// Use the constructor that accepts reader and writer
-	tr := NewStdioTransport(strings.NewReader(""), outW) // Input reader is empty, not used in this Send test
+	// Create transport using config
+	config := DefaultTransportConfig(TransportTypeStdio)
+	config.StdioReader = strings.NewReader("")
+	config.StdioWriter = outW
+	config.Features.EnableReliability = false   // Disable for test
+	config.Features.EnableObservability = false // Disable for test
+	baseTransport, _ := NewTransport(config)
+
+	// Cast to StdioTransport to access Send method
+	tr, ok := baseTransport.(*StdioTransport)
+	if !ok {
+		t.Fatal("Expected StdioTransport")
+	}
 
 	testData := []byte("hello world")
 	buf := make([]byte, len(testData)+1) // +1 for newline
@@ -104,7 +127,18 @@ func TestStdioTransport_SendRequest_ReceiveResponse(t *testing.T) {
 	srvOutR, srvOutW := io.Pipe()
 
 	// Initialize the transport
-	tr := NewStdioTransport(srvOutR, srvInW)
+	config := DefaultTransportConfig(TransportTypeStdio)
+	config.StdioReader = srvOutR
+	config.StdioWriter = srvInW
+	config.Features.EnableReliability = false   // Disable for test
+	config.Features.EnableObservability = false // Disable for test
+	baseTransport, _ := NewTransport(config)
+
+	// Cast to StdioTransport to access specific methods
+	tr, ok := baseTransport.(*StdioTransport)
+	if !ok {
+		t.Fatal("Expected StdioTransport")
+	}
 
 	// Start the transport in a goroutine
 	transportErrors := make(chan error, 1)
@@ -262,7 +296,18 @@ func TestStdioTransport_ReceiveRequest_SendResponse(t *testing.T) {
 	cltInR, cltInW := io.Pipe()   // Transport's input (client writes here)
 	cltOutR, cltOutW := io.Pipe() // Transport's output (client reads here)
 
-	tr := NewStdioTransport(cltInR, cltOutW)
+	config := DefaultTransportConfig(TransportTypeStdio)
+	config.StdioReader = cltInR
+	config.StdioWriter = cltOutW
+	config.Features.EnableReliability = false   // Disable for test
+	config.Features.EnableObservability = false // Disable for test
+	baseTransport, _ := NewTransport(config)
+
+	// Cast to StdioTransport to access specific methods
+	tr, ok := baseTransport.(*StdioTransport)
+	if !ok {
+		t.Fatal("Expected StdioTransport")
+	}
 
 	// Register a request handler
 	type EchoRequestParams struct {
@@ -338,7 +383,18 @@ func TestStdioTransport_ReceiveNotification(t *testing.T) {
 	// Output pipe is not strictly needed for this test if no response is sent, but good practice
 	_, cltOutW := io.Pipe()
 
-	tr := NewStdioTransport(cltInR, cltOutW)
+	config := DefaultTransportConfig(TransportTypeStdio)
+	config.StdioReader = cltInR
+	config.StdioWriter = cltOutW
+	config.Features.EnableReliability = false   // Disable for test
+	config.Features.EnableObservability = false // Disable for test
+	baseTransport, _ := NewTransport(config)
+
+	// Cast to StdioTransport to access specific methods
+	tr, ok := baseTransport.(*StdioTransport)
+	if !ok {
+		t.Fatal("Expected StdioTransport")
+	}
 
 	type NotificationParams struct {
 		EventData string `json:"event_data"`
@@ -401,7 +457,18 @@ func TestStdioTransport_ProcessMessage_MalformedJSON(t *testing.T) {
 	cltInR, cltInW := io.Pipe() // Transport's input
 	_, cltOutW := io.Pipe()     // Transport's output (not used for response here)
 
-	tr := NewStdioTransport(cltInR, cltOutW)
+	config := DefaultTransportConfig(TransportTypeStdio)
+	config.StdioReader = cltInR
+	config.StdioWriter = cltOutW
+	config.Features.EnableReliability = false   // Disable for test
+	config.Features.EnableObservability = false // Disable for test
+	baseTransport, _ := NewTransport(config)
+
+	// Cast to StdioTransport to access specific methods
+	tr, ok := baseTransport.(*StdioTransport)
+	if !ok {
+		t.Fatal("Expected StdioTransport")
+	}
 
 	// Use a buffered channel to communicate errors between goroutines in a thread-safe way
 	errorChan := make(chan error, 1)
@@ -459,7 +526,18 @@ func TestStdioTransport_SendNotification_NoHandler(t *testing.T) {
 	cltInR, cltInW := io.Pipe() // Transport's input (client writes here)
 	_, cltOutW := io.Pipe()     // Transport's output
 
-	tr := NewStdioTransport(cltInR, cltOutW)
+	config := DefaultTransportConfig(TransportTypeStdio)
+	config.StdioReader = cltInR
+	config.StdioWriter = cltOutW
+	config.Features.EnableReliability = false   // Disable for test
+	config.Features.EnableObservability = false // Disable for test
+	baseTransport, _ := NewTransport(config)
+
+	// Cast to StdioTransport to access specific methods
+	tr, ok := baseTransport.(*StdioTransport)
+	if !ok {
+		t.Fatal("Expected StdioTransport")
+	}
 
 	// No handler registered for "unhandled_event"
 
@@ -498,7 +576,18 @@ func TestStdioTransport_ContextCancellation(t *testing.T) {
 	cltInR, cltInPipeW := io.Pipe() // Transport's input, reader will block indefinitely
 	_, cltOutW := io.Pipe()         // Transport's output
 
-	tr := NewStdioTransport(cltInR, cltOutW)
+	config := DefaultTransportConfig(TransportTypeStdio)
+	config.StdioReader = cltInR
+	config.StdioWriter = cltOutW
+	config.Features.EnableReliability = false   // Disable for test
+	config.Features.EnableObservability = false // Disable for test
+	baseTransport, _ := NewTransport(config)
+
+	// Cast to StdioTransport to access specific methods
+	tr, ok := baseTransport.(*StdioTransport)
+	if !ok {
+		t.Fatal("Expected StdioTransport")
+	}
 
 	startErrChan := make(chan error, 1)
 	go func() {

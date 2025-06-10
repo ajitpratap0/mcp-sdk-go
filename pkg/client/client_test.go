@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 
 // mockTransport implements the transport.Transport interface for testing
 type mockTransport struct {
+	sync.RWMutex
 	initialized          bool
 	initializeErr        error
 	startErr             error
@@ -57,15 +59,23 @@ func (m *mockTransport) Stop(ctx context.Context) error {
 }
 
 func (m *mockTransport) SendRequest(ctx context.Context, method string, params interface{}) (interface{}, error) {
+	m.Lock()
 	m.sentRequests[method] = params
-	if m.sendRequestFunc != nil {
-		return m.sendRequestFunc(ctx, method, params)
+	sendFunc := m.sendRequestFunc
+	response := m.sendRequestResponse
+	err := m.sendRequestErr
+	m.Unlock()
+
+	if sendFunc != nil {
+		return sendFunc(ctx, method, params)
 	}
-	return m.sendRequestResponse, m.sendRequestErr
+	return response, err
 }
 
 func (m *mockTransport) SendNotification(ctx context.Context, method string, params interface{}) error {
+	m.Lock()
 	m.sentNotifications[method] = params
+	m.Unlock()
 	return nil
 }
 
@@ -102,6 +112,71 @@ func (m *mockTransport) SetReceiveHandler(handler transport.ReceiveHandler) {
 // SetErrorHandler sets the handler for errors
 func (m *mockTransport) SetErrorHandler(handler transport.ErrorHandler) {
 	// No-op for mock
+}
+
+// HandleResponse implements the transport.Transport interface
+func (m *mockTransport) HandleResponse(response *protocol.Response) {
+	// No-op for mock
+}
+
+// HandleRequest implements the transport.Transport interface
+func (m *mockTransport) HandleRequest(ctx context.Context, request *protocol.Request) (*protocol.Response, error) {
+	if handler, ok := m.requestHandlers[request.Method]; ok {
+		result, err := handler(ctx, request.Params)
+		if err != nil {
+			return nil, err
+		}
+		return protocol.NewResponse(request.ID, result)
+	}
+	return nil, errors.New("method not found")
+}
+
+// HandleNotification implements the transport.Transport interface
+func (m *mockTransport) HandleNotification(ctx context.Context, notification *protocol.Notification) error {
+	if handler, ok := m.notificationHandlers[notification.Method]; ok {
+		return handler(ctx, notification.Params)
+	}
+	return errors.New("notification handler not found")
+}
+
+// GetRequestIDPrefix implements the transport.Transport interface
+func (m *mockTransport) GetRequestIDPrefix() string {
+	return "test"
+}
+
+// GetNextID implements the transport.Transport interface
+func (m *mockTransport) GetNextID() int64 {
+	return 1
+}
+
+// Cleanup implements the transport.Transport interface
+func (m *mockTransport) Cleanup() {
+	// No-op for mock
+}
+
+// Lock implements the transport.Transport interface
+func (m *mockTransport) Lock() {
+	m.RWMutex.Lock()
+}
+
+// Unlock implements the transport.Transport interface
+func (m *mockTransport) Unlock() {
+	m.RWMutex.Unlock()
+}
+
+// SetSendRequestFunc safely sets the sendRequestFunc
+func (m *mockTransport) SetSendRequestFunc(fn func(ctx context.Context, method string, params interface{}) (interface{}, error)) {
+	m.Lock()
+	m.sendRequestFunc = fn
+	m.Unlock()
+}
+
+// SetSendRequestResponse safely sets the sendRequestResponse
+func (m *mockTransport) SetSendRequestResponse(response interface{}, err error) {
+	m.Lock()
+	m.sendRequestResponse = response
+	m.sendRequestErr = err
+	m.Unlock()
 }
 
 // Tests for client creation and options
@@ -170,9 +245,9 @@ func TestClientInitialize(t *testing.T) {
 		Homepage:    "http://example.com",
 	}
 
-	mt.sendRequestResponse = &protocol.InitializeResult{
+	mt.SetSendRequestResponse(&protocol.InitializeResult{
 		ServerInfo: serverInfo,
-	}
+	}, nil)
 
 	// Initialize the client
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
@@ -238,11 +313,11 @@ func TestClientInitializeError(t *testing.T) {
 	// Test error parsing initialize result
 	mt.sendRequestErr = nil
 	// Create a protocol.Response with invalid JSON in the Result field
-	mt.sendRequestResponse = &protocol.Response{
+	mt.SetSendRequestResponse(&protocol.Response{
 		JSONRPCMessage: protocol.JSONRPCMessage{JSONRPC: protocol.JSONRPCVersion},
 		ID:             "test-id",
 		Result:         json.RawMessage("invalid json"),
-	}
+	}, nil)
 
 	err = client.Initialize(ctx)
 	if err == nil {
@@ -303,7 +378,7 @@ func TestListTools(t *testing.T) {
 	client.serverInfo = &protocol.ServerInfo{Name: "test-server", Version: "1.0"}
 
 	// Test successful list
-	mt.sendRequestResponse = &protocol.ListToolsResult{
+	mt.SetSendRequestResponse(&protocol.ListToolsResult{
 		Tools: []protocol.Tool{
 			{Name: "tool1", Description: "Tool 1"},
 			{Name: "tool2", Description: "Tool 2"},
@@ -312,7 +387,7 @@ func TestListTools(t *testing.T) {
 			NextCursor: "cursor123",
 			HasMore:    true,
 		},
-	}
+	}, nil)
 
 	tools, pagination, err := client.ListTools(context.Background(), "", nil)
 	if err != nil {
@@ -358,9 +433,9 @@ func TestCallTool(t *testing.T) {
 	client.serverInfo = &protocol.ServerInfo{Name: "test-server", Version: "1.0"}
 
 	// Test successful tool call
-	mt.sendRequestResponse = &protocol.CallToolResult{
+	mt.SetSendRequestResponse(&protocol.CallToolResult{
 		Result: json.RawMessage(`{"output": "success"}`),
-	}
+	}, nil)
 
 	result, err := client.CallTool(context.Background(), "test-tool", map[string]interface{}{"param": "value"}, nil)
 	if err != nil {
@@ -372,9 +447,9 @@ func TestCallTool(t *testing.T) {
 	}
 
 	// Test tool call with error response
-	mt.sendRequestResponse = &protocol.CallToolResult{
+	mt.SetSendRequestResponse(&protocol.CallToolResult{
 		Error: "Tool execution failed",
-	}
+	}, nil)
 
 	result, err = client.CallTool(context.Background(), "error-tool", nil, nil)
 	if err != nil {
@@ -402,7 +477,7 @@ func TestListResources(t *testing.T) {
 	client.serverInfo = &protocol.ServerInfo{Name: "test-server", Version: "1.0"}
 
 	// Test successful list
-	mt.sendRequestResponse = &protocol.ListResourcesResult{
+	mt.SetSendRequestResponse(&protocol.ListResourcesResult{
 		Resources: []protocol.Resource{
 			{URI: "resource1", Name: "Resource 1"},
 			{URI: "resource2", Name: "Resource 2"},
@@ -410,7 +485,7 @@ func TestListResources(t *testing.T) {
 		Templates: []protocol.ResourceTemplate{
 			{URI: "template1", Name: "Template 1"},
 		},
-	}
+	}, nil)
 
 	resources, templates, pagination, err := client.ListResources(context.Background(), "", false, nil)
 	if err != nil {
@@ -464,13 +539,13 @@ func TestReadResource(t *testing.T) {
 	client.serverInfo = &protocol.ServerInfo{Name: "test-server", Version: "1.0"}
 
 	// Test successful read
-	mt.sendRequestResponse = &protocol.ReadResourceResult{
+	mt.SetSendRequestResponse(&protocol.ReadResourceResult{
 		Contents: protocol.ResourceContents{
 			URI:     "file.txt",
 			Type:    "text/plain",
 			Content: json.RawMessage(`"Hello, world!"`),
 		},
-	}
+	}, nil)
 
 	contents, err := client.ReadResource(context.Background(), "file.txt", nil, nil)
 	if err != nil {
@@ -509,12 +584,12 @@ func TestListPrompts(t *testing.T) {
 	client.serverInfo = &protocol.ServerInfo{Name: "test-server", Version: "1.0"}
 
 	// Test successful list
-	mt.sendRequestResponse = &protocol.ListPromptsResult{
+	mt.SetSendRequestResponse(&protocol.ListPromptsResult{
 		Prompts: []protocol.Prompt{
 			{ID: "prompt1", Name: "Prompt 1"},
 			{ID: "prompt2", Name: "Prompt 2"},
 		},
-	}
+	}, nil)
 
 	prompts, pagination, err := client.ListPrompts(context.Background(), "", nil)
 	if err != nil {
@@ -561,7 +636,7 @@ func TestGetPrompt(t *testing.T) {
 	client.serverInfo = &protocol.ServerInfo{Name: "test-server", Version: "1.0"}
 
 	// Test successful get
-	mt.sendRequestResponse = &protocol.GetPromptResult{
+	mt.SetSendRequestResponse(&protocol.GetPromptResult{
 		Prompt: protocol.Prompt{
 			ID:   "greeting",
 			Name: "Greeting Prompt",
@@ -569,7 +644,7 @@ func TestGetPrompt(t *testing.T) {
 				{Role: "user", Content: "Say hello"},
 			},
 		},
-	}
+	}, nil)
 
 	prompt, err := client.GetPrompt(context.Background(), "greeting")
 	if err != nil {
@@ -673,9 +748,9 @@ func TestSubscribeResource(t *testing.T) {
 	client.serverInfo = &protocol.ServerInfo{Name: "test-server", Version: "1.0"}
 
 	// Test successful subscription
-	mt.sendRequestResponse = &protocol.SubscribeResourceResult{
+	mt.SetSendRequestResponse(&protocol.SubscribeResourceResult{
 		Success: true,
-	}
+	}, nil)
 
 	err := client.SubscribeResource(context.Background(), "resource1", false)
 	if err != nil {
@@ -699,12 +774,12 @@ func TestListRoots(t *testing.T) {
 	client.serverInfo = &protocol.ServerInfo{Name: "test-server", Version: "1.0"}
 
 	// Test successful list
-	mt.sendRequestResponse = &protocol.ListRootsResult{
+	mt.SetSendRequestResponse(&protocol.ListRootsResult{
 		Roots: []protocol.Root{
 			{ID: "root1", Name: "Root 1"},
 			{ID: "root2", Name: "Root 2"},
 		},
-	}
+	}, nil)
 
 	roots, pagination, err := client.ListRoots(context.Background(), "", nil)
 	if err != nil {
@@ -737,9 +812,9 @@ func TestSetLogLevel(t *testing.T) {
 	client.serverInfo = &protocol.ServerInfo{Name: "test-server", Version: "1.0"}
 
 	// Test successful set log level
-	mt.sendRequestResponse = &protocol.SetLogLevelResult{
+	mt.SetSendRequestResponse(&protocol.SetLogLevelResult{
 		Success: true,
-	}
+	}, nil)
 
 	err := client.SetLogLevel(context.Background(), protocol.LogLevelDebug)
 	if err != nil {
@@ -770,9 +845,9 @@ func TestCancel(t *testing.T) {
 	client.serverInfo = &protocol.ServerInfo{Name: "test-server", Version: "1.0"}
 
 	// Test successful cancel
-	mt.sendRequestResponse = &protocol.CancelResult{
+	mt.SetSendRequestResponse(&protocol.CancelResult{
 		Cancelled: true,
-	}
+	}, nil)
 
 	cancelled, err := client.Cancel(context.Background(), "request-123")
 	if err != nil {
@@ -801,9 +876,9 @@ func TestPing(t *testing.T) {
 
 	// Test successful ping
 	expectedTimestamp := time.Now().UnixNano() / int64(time.Millisecond)
-	mt.sendRequestResponse = &protocol.PingResult{
+	mt.SetSendRequestResponse(&protocol.PingResult{
 		Timestamp: expectedTimestamp,
-	}
+	}, nil)
 
 	result, err := client.Ping(context.Background())
 	if err != nil {
@@ -851,7 +926,7 @@ func TestInitializeAndStart(t *testing.T) {
 	client := New(mt)
 
 	// Set up successful initialize response
-	mt.sendRequestResponse = &protocol.InitializeResult{
+	mt.SetSendRequestResponse(&protocol.InitializeResult{
 		ProtocolVersion: "1.0",
 		ServerInfo: &protocol.ServerInfo{
 			Name:    "test-server",
@@ -860,7 +935,7 @@ func TestInitializeAndStart(t *testing.T) {
 		Capabilities: map[string]bool{
 			"tools": true,
 		},
-	}
+	}, nil)
 
 	err := client.InitializeAndStart(context.Background())
 	if err != nil {
@@ -1149,11 +1224,11 @@ func TestComplete(t *testing.T) {
 	client.serverInfo = &protocol.ServerInfo{Name: "test-server", Version: "1.0"}
 
 	// Test successful completion
-	mt.sendRequestResponse = &protocol.CompleteResult{
+	mt.SetSendRequestResponse(&protocol.CompleteResult{
 		Content:      "This is the completion result",
 		Model:        "test-model",
 		FinishReason: "stop",
-	}
+	}, nil)
 
 	params := &protocol.CompleteParams{
 		Messages: []protocol.Message{
@@ -1188,7 +1263,7 @@ func TestListAllTools(t *testing.T) {
 
 	// Mock first page
 	callCount := 0
-	mt.sendRequestResponse = &protocol.ListToolsResult{
+	mt.SetSendRequestResponse(&protocol.ListToolsResult{
 		Tools: []protocol.Tool{
 			{Name: "tool1"},
 			{Name: "tool2"},
@@ -1197,10 +1272,10 @@ func TestListAllTools(t *testing.T) {
 			NextCursor: "cursor1",
 			HasMore:    true,
 		},
-	}
+	}, nil)
 
 	// Override SendRequest to handle multiple calls
-	mt.sendRequestFunc = func(ctx context.Context, method string, params interface{}) (interface{}, error) {
+	mt.SetSendRequestFunc(func(ctx context.Context, method string, params interface{}) (interface{}, error) {
 		callCount++
 		if callCount == 1 {
 			return &protocol.ListToolsResult{
@@ -1223,7 +1298,7 @@ func TestListAllTools(t *testing.T) {
 				},
 			}, nil
 		}
-	}
+	})
 
 	tools, err := client.ListAllTools(context.Background(), "test-category")
 	if err != nil {
@@ -1235,7 +1310,7 @@ func TestListAllTools(t *testing.T) {
 	}
 
 	// Restore original
-	mt.sendRequestFunc = nil
+	mt.SetSendRequestFunc(nil)
 }
 
 // TestListAllResources tests the ListAllResources pagination helper
@@ -1248,7 +1323,7 @@ func TestListAllResources(t *testing.T) {
 
 	// Override SendRequest to handle multiple calls
 	callCount := 0
-	mt.sendRequestFunc = func(ctx context.Context, method string, params interface{}) (interface{}, error) {
+	mt.SetSendRequestFunc(func(ctx context.Context, method string, params interface{}) (interface{}, error) {
 		callCount++
 		if callCount == 1 {
 			return &protocol.ListResourcesResult{
@@ -1277,7 +1352,7 @@ func TestListAllResources(t *testing.T) {
 				},
 			}, nil
 		}
-	}
+	})
 
 	resources, templates, err := client.ListAllResources(context.Background(), "", false)
 	if err != nil {
@@ -1307,7 +1382,7 @@ func TestCallToolStreamingWithProgressUpdates(t *testing.T) {
 	}
 
 	// Set up to handle async progress updates
-	mt.sendRequestFunc = func(ctx context.Context, method string, params interface{}) (interface{}, error) {
+	mt.SetSendRequestFunc(func(ctx context.Context, method string, params interface{}) (interface{}, error) {
 		// Get the request ID from params
 		var p map[string]interface{}
 		var paramsBytes []byte
@@ -1344,7 +1419,7 @@ func TestCallToolStreamingWithProgressUpdates(t *testing.T) {
 		return &protocol.CallToolResult{
 			Result: json.RawMessage(`{"output": "completed"}`),
 		}, nil
-	}
+	})
 
 	result, err := client.CallToolStreaming(context.Background(), "progress-tool", nil, nil, updateHandler)
 	if err != nil {
@@ -1365,7 +1440,7 @@ func TestCallToolStreamingWithProgressUpdates(t *testing.T) {
 
 	// Test with simple progress data (non-structured)
 	updates = nil
-	mt.sendRequestFunc = func(ctx context.Context, method string, params interface{}) (interface{}, error) {
+	mt.SetSendRequestFunc(func(ctx context.Context, method string, params interface{}) (interface{}, error) {
 		var p map[string]interface{}
 		var paramsBytes []byte
 		switch v := params.(type) {
@@ -1391,7 +1466,7 @@ func TestCallToolStreamingWithProgressUpdates(t *testing.T) {
 
 		time.Sleep(30 * time.Millisecond)
 		return &protocol.CallToolResult{Result: json.RawMessage(`{"output": "done"}`)}, nil
-	}
+	})
 
 	_, err = client.CallToolStreaming(context.Background(), "simple-progress-tool", nil, nil, updateHandler)
 	if err != nil {
@@ -1401,7 +1476,7 @@ func TestCallToolStreamingWithProgressUpdates(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Reset
-	mt.sendRequestFunc = nil
+	mt.SetSendRequestFunc(nil)
 }
 
 // TestListAllPrompts tests the ListAllPrompts pagination helper
@@ -1414,7 +1489,7 @@ func TestListAllPrompts(t *testing.T) {
 
 	// Override SendRequest to handle multiple calls
 	callCount := 0
-	mt.sendRequestFunc = func(ctx context.Context, method string, params interface{}) (interface{}, error) {
+	mt.SetSendRequestFunc(func(ctx context.Context, method string, params interface{}) (interface{}, error) {
 		callCount++
 		if callCount == 1 {
 			return &protocol.ListPromptsResult{
@@ -1437,7 +1512,7 @@ func TestListAllPrompts(t *testing.T) {
 				},
 			}, nil
 		}
-	}
+	})
 
 	prompts, err := client.ListAllPrompts(context.Background(), "test-tag")
 	if err != nil {
@@ -1459,7 +1534,7 @@ func TestListAllRoots(t *testing.T) {
 
 	// Override SendRequest to handle multiple calls
 	callCount := 0
-	mt.sendRequestFunc = func(ctx context.Context, method string, params interface{}) (interface{}, error) {
+	mt.SetSendRequestFunc(func(ctx context.Context, method string, params interface{}) (interface{}, error) {
 		callCount++
 		if callCount == 1 {
 			return &protocol.ListRootsResult{
@@ -1482,7 +1557,7 @@ func TestListAllRoots(t *testing.T) {
 				},
 			}, nil
 		}
-	}
+	})
 
 	roots, err := client.ListAllRoots(context.Background(), "test-tag")
 	if err != nil {
@@ -1508,9 +1583,9 @@ func TestCallToolStreaming(t *testing.T) {
 		updates = append(updates, data)
 	}
 
-	mt.sendRequestResponse = &protocol.CallToolResult{
+	mt.SetSendRequestResponse(&protocol.CallToolResult{
 		Result: json.RawMessage(`{"output": "final result"}`),
-	}
+	}, nil)
 
 	result, err := client.CallToolStreaming(context.Background(), "test-tool", map[string]interface{}{"param": "value"}, map[string]interface{}{"context": "data"}, updateHandler)
 	if err != nil {
@@ -1533,10 +1608,10 @@ func TestCallToolStreaming(t *testing.T) {
 	client.capabilities[string(protocol.CapabilityTools)] = true
 
 	// Set up a delayed response
-	mt.sendRequestFunc = func(ctx context.Context, method string, params interface{}) (interface{}, error) {
+	mt.SetSendRequestFunc(func(ctx context.Context, method string, params interface{}) (interface{}, error) {
 		time.Sleep(100 * time.Millisecond)
 		return &protocol.CallToolResult{Result: json.RawMessage(`{"output": "delayed"}`)}, nil
-	}
+	})
 
 	// Cancel context immediately
 	cancel()
@@ -1547,9 +1622,9 @@ func TestCallToolStreaming(t *testing.T) {
 	}
 
 	// Test with transport error
-	mt.sendRequestFunc = func(ctx context.Context, method string, params interface{}) (interface{}, error) {
+	mt.SetSendRequestFunc(func(ctx context.Context, method string, params interface{}) (interface{}, error) {
 		return nil, errors.New("transport error")
-	}
+	})
 
 	_, err = client.CallToolStreaming(context.Background(), "test-tool", nil, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "transport error") {
@@ -1557,9 +1632,9 @@ func TestCallToolStreaming(t *testing.T) {
 	}
 
 	// Test with parse error
-	mt.sendRequestFunc = func(ctx context.Context, method string, params interface{}) (interface{}, error) {
+	mt.SetSendRequestFunc(func(ctx context.Context, method string, params interface{}) (interface{}, error) {
 		return "invalid result", nil
-	}
+	})
 
 	_, err = client.CallToolStreaming(context.Background(), "test-tool", nil, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "failed to parse call tool result") {
@@ -1567,7 +1642,7 @@ func TestCallToolStreaming(t *testing.T) {
 	}
 
 	// Reset
-	mt.sendRequestFunc = nil
+	mt.SetSendRequestFunc(nil)
 }
 
 // TestNextRequestID tests the nextRequestID helper function
@@ -1760,7 +1835,7 @@ func TestInitializeWithStreamableHTTPTransport(t *testing.T) {
 	client := New(mt)
 
 	// Mock the transport to return a valid initialize result
-	mt.sendRequestResponse = &protocol.InitializeResult{
+	mt.SetSendRequestResponse(&protocol.InitializeResult{
 		ProtocolVersion: "1.0",
 		ServerInfo: &protocol.ServerInfo{
 			Name:    "test-server",
@@ -1769,7 +1844,7 @@ func TestInitializeWithStreamableHTTPTransport(t *testing.T) {
 		Capabilities: map[string]bool{
 			"tools": true,
 		},
-	}
+	}, nil)
 
 	ctx := context.Background()
 	err := client.Initialize(ctx)

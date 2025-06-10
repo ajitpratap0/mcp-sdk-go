@@ -4,11 +4,14 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	cryptorand "crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
+	"math"
+	"math/big"
 	"net/http"
 	"os"
 	"strconv"
@@ -21,62 +24,274 @@ import (
 	"github.com/ajitpratap0/mcp-sdk-go/pkg/protocol"
 )
 
+// ReconnectionConfig configures the reconnection behavior
+type ReconnectionConfig struct {
+	InitialBackoff      time.Duration
+	MaxBackoff          time.Duration
+	MaxRetries          int
+	BackoffMultiplier   float64
+	JitterPercent       float64
+	HealthCheckInterval time.Duration
+}
+
+// DefaultReconnectionConfig returns sensible defaults for reconnection
+func DefaultReconnectionConfig() *ReconnectionConfig {
+	return &ReconnectionConfig{
+		InitialBackoff:      time.Second,
+		MaxBackoff:          30 * time.Second,
+		MaxRetries:          10,
+		BackoffMultiplier:   2.0,
+		JitterPercent:       20.0,
+		HealthCheckInterval: 30 * time.Second,
+	}
+}
+
+// ConnectionState represents the current state of a connection
+type ConnectionState int
+
+const (
+	StateDisconnected ConnectionState = iota
+	StateConnecting
+	StateConnected
+	StateReconnecting
+	StateFailed
+)
+
+// String returns a human-readable representation of the connection state
+func (s ConnectionState) String() string {
+	switch s {
+	case StateDisconnected:
+		return "disconnected"
+	case StateConnecting:
+		return "connecting"
+	case StateConnected:
+		return "connected"
+	case StateReconnecting:
+		return "reconnecting"
+	case StateFailed:
+		return "failed"
+	default:
+		return "unknown"
+	}
+}
+
+// ErrorType classifies errors for retry logic
+type ErrorType int
+
+const (
+	ErrorTypeRetryable ErrorType = iota
+	ErrorTypeNonRetryable
+	ErrorTypeBackoff
+	ErrorTypeCircuitBreaker
+)
+
+// CircuitBreakerState represents the state of a circuit breaker
+type CircuitBreakerState int
+
+const (
+	CircuitClosed CircuitBreakerState = iota
+	CircuitOpen
+	CircuitHalfOpen
+)
+
+// CircuitBreaker implements the circuit breaker pattern for connection reliability
+type CircuitBreaker struct {
+	state            CircuitBreakerState
+	failureCount     int
+	lastFailureTime  time.Time
+	lastSuccessTime  time.Time
+	failureThreshold int
+	recoveryTimeout  time.Duration
+	halfOpenMaxCalls int
+	halfOpenCalls    int
+	mu               sync.RWMutex
+}
+
+// NewCircuitBreaker creates a new circuit breaker with default settings
+func NewCircuitBreaker() *CircuitBreaker {
+	return &CircuitBreaker{
+		state:            CircuitClosed,
+		failureThreshold: 5,
+		recoveryTimeout:  60 * time.Second,
+		halfOpenMaxCalls: 3,
+	}
+}
+
+// ReconnectionMetrics tracks reconnection statistics
+type ReconnectionMetrics struct {
+	attempts      int64
+	successes     int64
+	failures      int64
+	totalDuration time.Duration
+	lastAttempt   time.Time
+	mu            sync.RWMutex
+}
+
+// EventBuffer buffers events during brief disconnections for improved reliability
+type EventBuffer struct {
+	events  [][]byte
+	maxSize int
+	mu      sync.Mutex
+}
+
+// NewEventBuffer creates a new event buffer with the specified maximum size
+func NewEventBuffer(maxSize int) *EventBuffer {
+	if maxSize <= 0 {
+		maxSize = 100 // Default buffer size
+	}
+	return &EventBuffer{
+		events:  make([][]byte, 0, maxSize),
+		maxSize: maxSize,
+	}
+}
+
+// Add adds an event to the buffer, removing old events if necessary
+func (eb *EventBuffer) Add(event []byte) {
+	eb.mu.Lock()
+	defer eb.mu.Unlock()
+
+	// Create a copy of the event data to avoid reference issues
+	eventCopy := make([]byte, len(event))
+	copy(eventCopy, event)
+
+	if len(eb.events) >= eb.maxSize {
+		// Remove oldest event (FIFO)
+		eb.events = eb.events[1:]
+	}
+
+	eb.events = append(eb.events, eventCopy)
+}
+
+// DrainTo drains all buffered events to the provided channel
+func (eb *EventBuffer) DrainTo(ch chan []byte) int {
+	eb.mu.Lock()
+	defer eb.mu.Unlock()
+
+	drained := 0
+	for _, event := range eb.events {
+		select {
+		case ch <- event:
+			drained++
+		default:
+			// Channel is full, stop draining
+			break
+		}
+	}
+
+	// Clear the buffer after draining
+	eb.events = eb.events[:0]
+	return drained
+}
+
+// Size returns the current number of buffered events
+func (eb *EventBuffer) Size() int {
+	eb.mu.Lock()
+	defer eb.mu.Unlock()
+	return len(eb.events)
+}
+
+// drainBufferedEvents drains any buffered events to the message channel
+// This should be called when a connection is successfully (re)established
+func (es *StreamableEventSource) drainBufferedEvents() {
+	if es.eventBuffer == nil {
+		return
+	}
+
+	bufferSize := es.eventBuffer.Size()
+	if bufferSize > 0 {
+		drained := es.eventBuffer.DrainTo(es.MessageChan)
+		fmt.Printf("[DEBUG] Drained %d/%d buffered events for stream %s\n", drained, bufferSize, es.StreamID)
+	}
+}
+
 // StreamableHTTPTransport implements Transport using the Streamable HTTP protocol
 // which provides advanced features over the basic HTTP+SSE transport like
-// resumability, session management, and multiple connection support.
+// resumability, session management, multiple connection support, and built-in reliability.
 type StreamableHTTPTransport struct {
 	*BaseTransport
-	endpoint         string
-	client           *http.Client
-	eventSources     sync.Map // map[string]*StreamableEventSource - multiple connections support
-	running          atomic.Bool
-	options          *Options
-	headers          map[string]string
-	requestIDPrefix  string
-	sessionID        string
+	endpoint        string
+	client          *http.Client
+	eventSources    sync.Map // map[string]*StreamableEventSource - multiple connections support
+	running         atomic.Bool
+	headers         map[string]string
+	requestIDPrefix string
+	sessionID       string
+	allowedOrigins  []string // For client-side origin validation
+
+	// Enhanced connection management
+	reconnectConfig *ReconnectionConfig
+	circuitBreaker  *CircuitBreaker
+	connectionState ConnectionState
+	metrics         *ReconnectionMetrics
+
 	mu               sync.Mutex
 	progressHandlers map[string]ProgressHandler
 	responseHandlers map[string]func(*protocol.Response)
 	pendingRequests  map[string]chan *protocol.Response
 	logger           *log.Logger
+	sessionHandler   SessionHandler
 }
 
 // StreamableEventSource is an enhanced client for Server-Sent Events
 // with support for resumability and event IDs
 type StreamableEventSource struct {
-	URL         string
-	Headers     map[string]string
-	Client      *http.Client
-	Connection  *http.Response
-	MessageChan chan []byte
-	ErrorChan   chan error
-	CloseChan   chan struct{}
-	LastEventID string
-	StreamID    string // Unique identifier for this stream
-	mu          sync.Mutex
-	isConnected atomic.Bool
+	URL           string
+	Headers       map[string]string
+	Client        *http.Client
+	Connection    *http.Response
+	MessageChan   chan []byte
+	ErrorChan     chan error
+	CloseChan     chan struct{}
+	LastEventID   string
+	StreamID      string        // Unique identifier for this stream
+	retryInterval time.Duration // SSE retry interval from server
+	eventBuffer   *EventBuffer  // Buffer events during brief disconnections
+	mu            sync.Mutex
+	isConnected   atomic.Bool
 }
 
-// NewStreamableHTTPTransport creates a new Streamable HTTP transport
-func NewStreamableHTTPTransport(endpoint string, options ...Option) *StreamableHTTPTransport {
-	opts := NewOptions(options...)
-
+// newStreamableHTTPTransport creates a new Streamable HTTP transport from config
+func newStreamableHTTPTransport(config TransportConfig) (Transport, error) {
 	client := &http.Client{
-		Timeout: opts.RequestTimeout,
+		Timeout: config.Performance.RequestTimeout,
 	}
 
-	return &StreamableHTTPTransport{
+	t := &StreamableHTTPTransport{
 		BaseTransport:    NewBaseTransport(),
-		endpoint:         endpoint,
+		endpoint:         config.Endpoint,
 		client:           client,
-		options:          opts,
 		headers:          make(map[string]string),
 		requestIDPrefix:  "streamable-http",
+		allowedOrigins:   []string{}, // Empty by default, configured via middleware
+		connectionState:  StateDisconnected,
 		pendingRequests:  make(map[string]chan *protocol.Response),
 		progressHandlers: make(map[string]ProgressHandler),
 		responseHandlers: make(map[string]func(*protocol.Response)),
 		logger:           log.New(os.Stdout, "StreamableHTTPTransport: ", log.LstdFlags),
 	}
+
+	// Configure based on clean config
+	t.reconnectConfig = &ReconnectionConfig{
+		InitialBackoff:      config.Reliability.InitialRetryDelay,
+		MaxBackoff:          config.Reliability.MaxRetryDelay,
+		MaxRetries:          config.Reliability.MaxRetries,
+		BackoffMultiplier:   config.Reliability.RetryBackoffFactor,
+		JitterPercent:       20.0, // Standard jitter
+		HealthCheckInterval: 30 * time.Second,
+	}
+
+	// Circuit breaker configuration
+	if config.Reliability.CircuitBreaker.Enabled {
+		t.circuitBreaker = NewCircuitBreaker()
+		t.circuitBreaker.failureThreshold = config.Reliability.CircuitBreaker.FailureThreshold
+		t.circuitBreaker.recoveryTimeout = config.Reliability.CircuitBreaker.Timeout
+		t.circuitBreaker.halfOpenMaxCalls = config.Reliability.CircuitBreaker.SuccessThreshold
+	}
+
+	// Metrics initialization (replaced by middleware)
+	t.metrics = &ReconnectionMetrics{}
+
+	return t, nil
 }
 
 // SetRequestIDPrefix sets the prefix for request IDs
@@ -100,8 +315,15 @@ func (t *StreamableHTTPTransport) SetSessionID(sessionID string) {
 
 // Initialize sets up the Streamable HTTP transport
 func (t *StreamableHTTPTransport) Initialize(ctx context.Context) error {
+	// Validate origin if configured
+	if err := t.validateOrigin(); err != nil {
+		return err
+	}
+
 	// Set default headers
 	t.SetHeader("Accept", "application/json, text/event-stream")
+
+	// Connection pooling will be started via middleware when implemented
 
 	// Create a context with timeout for initialization
 	initCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -145,6 +367,8 @@ func (t *StreamableHTTPTransport) Initialize(ctx context.Context) error {
 			t.logger.Printf("[DEBUG] Failed to open listener connection: %v\n", err)
 		}
 	}()
+
+	// Reliability features will be started via middleware when implemented
 
 	return nil
 }
@@ -197,7 +421,8 @@ func (t *StreamableHTTPTransport) createEventSource(streamID string, initialLast
 		ErrorChan:   make(chan error, 10),
 		CloseChan:   make(chan struct{}),
 		StreamID:    streamID,
-		LastEventID: initialLastEventID, // Initialize with the passed ID
+		LastEventID: initialLastEventID,  // Initialize with the passed ID
+		eventBuffer: NewEventBuffer(100), // Buffer up to 100 events during disconnections
 	}
 
 	// Connect to the event source
@@ -247,6 +472,9 @@ func (t *StreamableHTTPTransport) createEventSource(streamID string, initialLast
 	es.Connection = resp
 	es.isConnected.Store(true)
 
+	// Drain any buffered events from previous disconnection
+	es.drainBufferedEvents()
+
 	// Start reading events
 	go es.readEvents(ctx)
 
@@ -256,6 +484,8 @@ func (t *StreamableHTTPTransport) createEventSource(streamID string, initialLast
 // SendRequest sends a request and waits for the response
 func (t *StreamableHTTPTransport) SendRequest(ctx context.Context, method string, params interface{}) (interface{}, error) {
 	idStr := fmt.Sprintf("%s-%d", t.requestIDPrefix, t.GetNextID()) // Ensure string ID for protocol compatibility
+
+	// Reliability will be handled via middleware when implemented
 
 	reqMsg, err := protocol.NewRequest(idStr, method, params)
 	if err != nil {
@@ -307,8 +537,8 @@ func (t *StreamableHTTPTransport) SendRequest(ctx context.Context, method string
 	}
 
 	// Wait for the response, or for the original context or a specific wait timeout to be done.
-	waitCtx, waitCancel := context.WithTimeout(ctx, t.options.RequestTimeout) // waitCtx inherits cancellation from ctx
-	defer waitCancel()                                                        // Cleans up the timer for waitCtx
+	waitCtx, waitCancel := context.WithTimeout(ctx, 30*time.Second) // Default timeout, now handled by middleware
+	defer waitCancel()                                              // Cleans up the timer for waitCtx
 
 	select {
 	case resp := <-responseChan:
@@ -368,7 +598,7 @@ func (t *StreamableHTTPTransport) SendRequest(ctx context.Context, method string
 
 		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
 			// This was a timeout specific to waitCtx, not the parent ctx
-			return nil, mcperrors.ResponseTimeout("streamable_http", idStr, t.options.RequestTimeout).
+			return nil, mcperrors.ResponseTimeout("streamable_http", idStr, 30*time.Second).
 				WithContext(&mcperrors.Context{
 					RequestID: idStr,
 					Method:    method,
@@ -403,8 +633,12 @@ func (t *StreamableHTTPTransport) SendRequest(ctx context.Context, method string
 	}
 }
 
+// Reliability methods will be implemented via middleware
+
 // SendNotification sends a notification (one-way message)
 func (t *StreamableHTTPTransport) SendNotification(ctx context.Context, method string, params interface{}) error {
+	// Reliability will be handled via middleware when implemented
+
 	notification, err := protocol.NewNotification(method, params)
 	if err != nil {
 		return fmt.Errorf("failed to create notification: %w", err)
@@ -477,6 +711,10 @@ func (t *StreamableHTTPTransport) Stop(ctx context.Context) error {
 	}
 	t.mu.Unlock()
 
+	// Reliability cleanup will be handled via middleware when implemented
+
+	// Connection pool cleanup will be handled via middleware when implemented
+
 	// Clean up BaseTransport resources
 	t.BaseTransport.Cleanup()
 
@@ -537,6 +775,7 @@ func (t *StreamableHTTPTransport) sendHTTPRequest(ctx context.Context, message i
 	}
 
 	// Send the request with context timeout
+	// Send the request
 	resp, err := t.client.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to send request: %w", err)
@@ -593,8 +832,13 @@ func (t *StreamableHTTPTransport) sendHTTPRequest(ctx context.Context, message i
 				CloseChan:   make(chan struct{}),
 				StreamID:    streamID,
 				LastEventID: lastEventID,
+				eventBuffer: NewEventBuffer(100), // Buffer up to 100 events during disconnections
 			}
-			es.isConnected.Store(true)         // Mark as connected since we have the live response
+			es.isConnected.Store(true) // Mark as connected since we have the live response
+
+			// Drain any buffered events from previous disconnection
+			es.drainBufferedEvents()
+
 			t.eventSources.Store(streamID, es) // Store it so SendRequest can find it
 
 			// Start reading events from this stream using the response body directly.
@@ -672,152 +916,123 @@ func (t *StreamableHTTPTransport) processEventSource(ctx context.Context, es *St
 		}
 	}()
 
-	// Exponential backoff for reconnection attempts
-	backoff := time.Second
-	maxBackoff := 30 * time.Second
+	// Enhanced reconnection logic with circuit breaker and configurable backoff
+	attempt := 0
+	t.updateConnectionState(StateConnecting)
 
 	for {
 		select {
 		case <-ctx.Done():
 			t.logger.Printf("processEventSource: Parent context done for stream %s: %v", es.StreamID, ctx.Err())
+			t.updateConnectionState(StateDisconnected)
 			return
 		default:
 		}
 
-		// Create a new context for this connection attempt
-		esConnectionCtx, esConnectionCancel := context.WithCancel(ctx)
-		readEventsDone := make(chan struct{})
+		// Check circuit breaker before attempting connection
+		circuitState := t.circuitBreaker.State()
+		if circuitState == CircuitOpen {
+			t.logger.Printf("processEventSource: Circuit breaker is open for stream %s, waiting for recovery", es.StreamID)
+			t.updateConnectionState(StateFailed)
 
-		// Start the event reading goroutine
-		go func() {
-			defer close(readEventsDone)
-			defer esConnectionCancel()
-			t.logger.Printf("processEventSource: Starting event reading goroutine for stream %s", es.StreamID)
-			es.readEvents(esConnectionCtx)
-			t.logger.Printf("processEventSource: Event reading goroutine finished for stream %s", es.StreamID)
-		}()
-
-		// Process messages until connection fails
-		keepProcessing := true
-		for keepProcessing {
+			// Wait for circuit breaker recovery timeout
 			select {
+			case <-time.After(t.circuitBreaker.recoveryTimeout):
+				t.logger.Printf("processEventSource: Circuit breaker recovery timeout elapsed for stream %s", es.StreamID)
 			case <-ctx.Done():
-				t.logger.Printf("processEventSource: Parent context done during message processing for stream %s: %v", es.StreamID, ctx.Err())
-				esConnectionCancel()
-				<-readEventsDone // Wait for readEvents to complete
-				return
-
-			case <-esConnectionCtx.Done():
-				t.logger.Printf("processEventSource: Connection context done for stream %s: %v. Will attempt reconnect if appropriate.", es.StreamID, esConnectionCtx.Err())
-				keepProcessing = false
-
-			case msg, ok := <-es.MessageChan:
-				if !ok {
-					t.logger.Printf("processEventSource: MessageChan closed for stream %s. Connection likely lost.", es.StreamID)
-					esConnectionCancel()
-					keepProcessing = false
-					continue
-				}
-				t.logger.Printf("processEventSource: Received message on stream %s: %s", es.StreamID, string(msg))
-				if err := t.handleMessage(ctx, msg); err != nil {
-					t.logger.Printf("Error handling message on stream %s: %v", es.StreamID, err)
-				}
-
-			case err, ok := <-es.ErrorChan:
-				if !ok || err != nil {
-					t.logger.Printf("processEventSource: Error on stream %s: %v", es.StreamID, err)
-					esConnectionCancel()
-					keepProcessing = false
-				}
-			}
-		}
-
-		// Wait for readEvents to complete before potentially reconnecting
-		<-readEventsDone
-
-		// Check if we should reconnect
-		if ctx.Err() != nil {
-			t.logger.Printf("processEventSource: Parent context done, not retrying connection for stream %s.", es.StreamID)
-			return
-		}
-
-		// Get LastEventID safely
-		es.mu.Lock()
-		lastEventID := es.LastEventID
-		streamID := es.StreamID
-		es.mu.Unlock()
-
-		// Reconnect logic
-		t.logger.Printf("processEventSource: Attempting to reconnect stream %s with LastEventID: %s", streamID, lastEventID)
-
-		// Check transport state
-		if !t.running.Load() {
-			t.logger.Printf("processEventSource: Transport not running, stopping reconnection for stream %s", streamID)
-			return
-		}
-
-		// For request-specific streams, check if the response handler still exists
-		if strings.HasPrefix(streamID, "request-") {
-			t.mu.Lock()
-			_, hasHandler := t.responseHandlers[streamID]
-			t.mu.Unlock()
-			if !hasHandler {
-				t.logger.Printf("processEventSource: No response handler for stream %s, stopping reconnection", streamID)
-				return
-			}
-		}
-
-		// This is where createEventSource or a similar mechanism would be called again.
-		// For the main listener, it should try indefinitely. For request streams, it might depend on request context.
-		var newEs *StreamableEventSource
-		var err error
-
-		if es.StreamID == "listener" {
-			t.logger.Printf("processEventSource: Reconnecting listener stream %s", es.StreamID)
-			newEs, err = t.createEventSource(es.StreamID, lastEventID, ctx)
-		} else if strings.HasPrefix(es.StreamID, "request-") {
-			// For request-specific streams, their lifecycle is tied to the request's context.
-			if ctx.Err() != nil {
-				t.logger.Printf("processEventSource: Request context done for stream %s, not reconnecting.", es.StreamID)
-				return
-			}
-			t.logger.Printf("processEventSource: Reconnecting request stream %s", es.StreamID)
-			newEs, err = t.createEventSource(es.StreamID, lastEventID, ctx)
-		} else {
-			t.logger.Printf("processEventSource: Unknown stream type %s, not attempting reconnect.", es.StreamID)
-			return
-		}
-
-		if err != nil {
-			t.logger.Printf("processEventSource: Failed to recreate event source for stream %s: %v. Retrying after delay.", es.StreamID, err)
-			select {
-			case <-time.After(backoff):
-				// Update backoff for next attempt
-				backoff = backoff * 2
-				if backoff > maxBackoff {
-					backoff = maxBackoff
-				}
-			case <-ctx.Done():
-				t.logger.Printf("processEventSource: Parent context done during reconnect backoff for stream %s.", es.StreamID)
+				t.logger.Printf("processEventSource: Parent context done during circuit breaker wait for stream %s", es.StreamID)
 				return
 			}
 			continue
 		}
 
-		// Safely update fields with mutex protection
-		es.mu.Lock()
-		es.URL = newEs.URL
-		es.Headers = newEs.Headers
-		es.Client = newEs.Client
-		es.Connection = newEs.Connection
-		es.LastEventID = newEs.LastEventID
-		es.StreamID = newEs.StreamID
-		es.mu.Unlock()
+		// Check retry limits
+		if attempt >= t.reconnectConfig.MaxRetries {
+			t.logger.Printf("processEventSource: Maximum retry attempts (%d) reached for stream %s",
+				t.reconnectConfig.MaxRetries, es.StreamID)
+			t.updateConnectionState(StateFailed)
+			return
+		}
 
-		t.logger.Printf("processEventSource: Successfully re-established event source for stream %s.", es.StreamID)
-		// Reset backoff on successful reconnection
-		backoff = time.Second
-		// Loop continues, a new esConnectionCtx will be created, and readEvents will be launched for the new 'es'
+		// Calculate backoff with jitter for this attempt
+		backoffDuration := t.calculateBackoffWithJitter(attempt, es)
+
+		// Apply backoff delay (except for first attempt)
+		if attempt > 0 {
+			t.logger.Printf("processEventSource: Waiting %v before reconnection attempt %d for stream %s",
+				backoffDuration, attempt+1, es.StreamID)
+
+			select {
+			case <-time.After(backoffDuration):
+				// Continue with reconnection attempt
+			case <-ctx.Done():
+				t.logger.Printf("processEventSource: Parent context done during backoff for stream %s", es.StreamID)
+				t.updateConnectionState(StateDisconnected)
+				return
+			}
+		}
+
+		// Record reconnection attempt start
+		reconnectStart := time.Now()
+		t.updateConnectionState(StateReconnecting)
+
+		// Attempt connection within circuit breaker
+		connectionErr := t.circuitBreaker.Call(func() error {
+			return t.attemptEventSourceConnection(ctx, es, attempt)
+		})
+
+		reconnectDuration := time.Since(reconnectStart)
+
+		if connectionErr != nil {
+			// Classify error to determine retry strategy
+			errorType := classifyError(connectionErr)
+
+			t.logger.Printf("processEventSource: Connection attempt %d failed for stream %s: %v (error type: %d)",
+				attempt+1, es.StreamID, connectionErr, errorType)
+
+			// Record failed attempt
+			t.recordReconnectionAttempt(false, reconnectDuration)
+
+			// Handle different error types
+			switch errorType {
+			case ErrorTypeNonRetryable:
+				t.logger.Printf("processEventSource: Non-retryable error for stream %s, stopping reconnection", es.StreamID)
+				t.updateConnectionState(StateFailed)
+				return
+			case ErrorTypeCircuitBreaker:
+				t.logger.Printf("processEventSource: Circuit breaker error for stream %s, will retry after recovery", es.StreamID)
+				attempt++ // Increment for circuit breaker scenarios
+				continue
+			default:
+				// Retryable error - increment attempt and continue
+				attempt++
+				continue
+			}
+		}
+
+		// Connection successful
+		t.logger.Printf("processEventSource: Successfully reconnected stream %s after %d attempts in %v",
+			es.StreamID, attempt+1, reconnectDuration)
+
+		t.recordReconnectionAttempt(true, reconnectDuration)
+		t.updateConnectionState(StateConnected)
+
+		// Reset attempt counter on successful connection
+		attempt = 0
+
+		// Process the connected stream
+		connectionLost := t.processConnectedEventSource(ctx, es)
+
+		if !connectionLost {
+			// Connection was deliberately closed, not lost
+			t.logger.Printf("processEventSource: Connection deliberately closed for stream %s", es.StreamID)
+			t.updateConnectionState(StateDisconnected)
+			return
+		}
+
+		// Connection lost, will retry
+		t.logger.Printf("processEventSource: Connection lost for stream %s, preparing to reconnect", es.StreamID)
+		attempt++
 	}
 }
 
@@ -890,6 +1105,8 @@ func (t *StreamableHTTPTransport) handleBatchMessage(ctx context.Context, data [
 func (t *StreamableHTTPTransport) HandleResponse(resp *protocol.Response) {
 	// Convert response ID to string for consistent map lookup
 	stringID := fmt.Sprintf("%v", resp.ID)
+
+	// Message acknowledgment will be handled via middleware when implemented
 
 	// Try custom handlers first
 	t.mu.Lock()
@@ -1129,6 +1346,9 @@ func (es *StreamableEventSource) Connect() error {
 	es.Connection = resp
 	es.isConnected.Store(true)
 
+	// Drain any buffered events from previous disconnection
+	es.drainBufferedEvents()
+
 	// Start reading events
 	go es.readEvents(context.Background())
 
@@ -1173,7 +1393,7 @@ func (es *StreamableEventSource) Close() {
 }
 
 // readEvents processes the SSE stream
-func (es *StreamableEventSource) readEvents(ctx context.Context) {
+func (es *StreamableEventSource) readEvents(_ context.Context) {
 	defer func() {
 		// Additional safety check in case of panics
 		if r := recover(); r != nil {
@@ -1363,13 +1583,129 @@ func (es *StreamableEventSource) readEvents(ctx context.Context) {
 			retryStr := strings.TrimPrefix(line, "retry:")
 			retryStr = strings.TrimSpace(retryStr)
 
-			// Try to parse retry time if provided
-			if retry, err := strconv.Atoi(retryStr); err == nil {
+			// Try to parse retry time if provided (in milliseconds per SSE spec)
+			if retry, err := strconv.Atoi(retryStr); err == nil && retry > 0 {
+				es.mu.Lock()
+				es.retryInterval = time.Duration(retry) * time.Millisecond
+				es.mu.Unlock()
 				fmt.Printf("[DEBUG] SSE retry interval set to %dms for stream %s\n", retry, es.StreamID)
 			}
 		} else {
 			// Unknown line type
 			fmt.Printf("[DEBUG] Unknown SSE line format for stream %s: %s\n", es.StreamID, line)
+		}
+	}
+}
+
+// attemptEventSourceConnection attempts to create a new event source connection
+func (t *StreamableHTTPTransport) attemptEventSourceConnection(ctx context.Context, es *StreamableEventSource, attempt int) error {
+	// Check if we should reconnect based on stream type and context
+	if ctx.Err() != nil {
+		return fmt.Errorf("context cancelled")
+	}
+
+	// Check transport state
+	if !t.running.Load() {
+		return fmt.Errorf("transport not running")
+	}
+
+	// For request-specific streams, check if the response handler still exists
+	if strings.HasPrefix(es.StreamID, "request-") {
+		t.mu.Lock()
+		_, hasHandler := t.responseHandlers[es.StreamID]
+		t.mu.Unlock()
+		if !hasHandler {
+			return fmt.Errorf("no response handler for request stream")
+		}
+	}
+
+	// Get LastEventID safely
+	es.mu.Lock()
+	lastEventID := es.LastEventID
+	streamID := es.StreamID
+	es.mu.Unlock()
+
+	t.logger.Printf("attemptEventSourceConnection: Attempting to reconnect stream %s with LastEventID: %s (attempt %d)",
+		streamID, lastEventID, attempt+1)
+
+	// Create new event source based on stream type
+	var newEs *StreamableEventSource
+	var err error
+
+	if strings.HasPrefix(es.StreamID, "listener") {
+		newEs, err = t.createEventSource(es.StreamID, lastEventID, ctx)
+	} else if strings.HasPrefix(es.StreamID, "request-") {
+		newEs, err = t.createEventSource(es.StreamID, lastEventID, ctx)
+	} else {
+		return fmt.Errorf("unknown stream type for stream %s", es.StreamID)
+	}
+
+	if err != nil {
+		return fmt.Errorf("failed to create event source: %w", err)
+	}
+
+	// Safely update event source fields with new connection
+	es.mu.Lock()
+	es.URL = newEs.URL
+	es.Headers = newEs.Headers
+	es.Client = newEs.Client
+	es.Connection = newEs.Connection
+	es.LastEventID = newEs.LastEventID
+	es.StreamID = newEs.StreamID
+	es.mu.Unlock()
+
+	return nil
+}
+
+// processConnectedEventSource handles the message processing loop for a connected event source
+func (t *StreamableHTTPTransport) processConnectedEventSource(ctx context.Context, es *StreamableEventSource) bool {
+	// Create a new context for this connection session
+	esConnectionCtx, esConnectionCancel := context.WithCancel(ctx)
+	readEventsDone := make(chan struct{})
+
+	// Start the event reading goroutine
+	go func() {
+		defer close(readEventsDone)
+		defer esConnectionCancel()
+		t.logger.Printf("processConnectedEventSource: Starting event reading goroutine for stream %s", es.StreamID)
+		es.readEvents(esConnectionCtx)
+		t.logger.Printf("processConnectedEventSource: Event reading goroutine finished for stream %s", es.StreamID)
+	}()
+
+	// Process messages until connection fails
+	for {
+		select {
+		case <-ctx.Done():
+			t.logger.Printf("processConnectedEventSource: Parent context done for stream %s: %v", es.StreamID, ctx.Err())
+			esConnectionCancel()
+			<-readEventsDone // Wait for readEvents to complete
+			return false     // Deliberate disconnection, not a connection loss
+
+		case <-esConnectionCtx.Done():
+			t.logger.Printf("processConnectedEventSource: Connection context done for stream %s: %v", es.StreamID, esConnectionCtx.Err())
+			<-readEventsDone // Wait for readEvents to complete
+			return true      // Connection lost, should retry
+
+		case msg, ok := <-es.MessageChan:
+			if !ok {
+				t.logger.Printf("processConnectedEventSource: MessageChan closed for stream %s. Connection likely lost.", es.StreamID)
+				esConnectionCancel()
+				<-readEventsDone // Wait for readEvents to complete
+				return true      // Connection lost, should retry
+			}
+
+			t.logger.Printf("processConnectedEventSource: Received message on stream %s: %s", es.StreamID, string(msg))
+			if err := t.handleMessage(ctx, msg); err != nil {
+				t.logger.Printf("Error handling message on stream %s: %v", es.StreamID, err)
+			}
+
+		case err, ok := <-es.ErrorChan:
+			if !ok || err != nil {
+				t.logger.Printf("processConnectedEventSource: Error on stream %s: %v", es.StreamID, err)
+				esConnectionCancel()
+				<-readEventsDone // Wait for readEvents to complete
+				return true      // Connection lost due to error, should retry
+			}
 		}
 	}
 }
@@ -1445,6 +1781,13 @@ func (t *StreamableHTTPTransport) GetSessionID() string {
 	return t.sessionID
 }
 
+// SetSessionHandler sets a handler for session lifecycle events
+func (t *StreamableHTTPTransport) SetSessionHandler(handler SessionHandler) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.sessionHandler = handler
+}
+
 // SetResponseHandler sets a custom handler for a specific response ID
 func (t *StreamableHTTPTransport) SetResponseHandler(id string, handler func(*protocol.Response)) {
 	// Create a channel for the response
@@ -1470,3 +1813,404 @@ func (t *StreamableHTTPTransport) RemoveResponseHandler(id string) {
 	delete(t.BaseTransport.pendingRequests, id)
 	t.BaseTransport.Unlock()
 }
+
+// SetAllowedOrigins configures allowed origins for this transport client
+// This is important for client-side validation when connecting to servers
+func (t *StreamableHTTPTransport) SetAllowedOrigins(origins []string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.allowedOrigins = make([]string, len(origins))
+	copy(t.allowedOrigins, origins)
+}
+
+// AddAllowedOrigin adds an allowed origin for this transport client
+func (t *StreamableHTTPTransport) AddAllowedOrigin(origin string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.allowedOrigins = append(t.allowedOrigins, origin)
+}
+
+// validateOrigin validates that the current endpoint origin is allowed
+func (t *StreamableHTTPTransport) validateOrigin() error {
+	// If no origins are configured, skip validation (backward compatibility)
+	t.mu.Lock()
+	origins := make([]string, len(t.allowedOrigins))
+	copy(origins, t.allowedOrigins)
+	t.mu.Unlock()
+
+	if len(origins) == 0 {
+		return nil
+	}
+
+	// Extract origin from endpoint URL
+	endpointOrigin, err := t.extractOriginFromURL(t.endpoint)
+	if err != nil {
+		return err
+	}
+
+	// Check if the endpoint origin is allowed
+	for _, allowed := range origins {
+		if allowed == "*" || allowed == endpointOrigin {
+			return nil
+		}
+		// Special handling for localhost - if both are localhost, allow regardless of port
+		if t.isLocalhostOrigin(endpointOrigin) && t.isLocalhostOrigin(allowed) {
+			// Also check that the schemes match for localhost
+			endpointScheme := strings.Split(endpointOrigin, "://")[0]
+			allowedScheme := strings.Split(allowed, "://")[0]
+			if endpointScheme == allowedScheme {
+				return nil
+			}
+		}
+	}
+
+	return mcperrors.NewError(
+		mcperrors.CodeValidationError,
+		"Server origin not allowed",
+		mcperrors.CategoryValidation,
+		mcperrors.SeverityError,
+	).WithDetail("Endpoint origin '" + endpointOrigin + "' is not in allowed origins list")
+}
+
+// isLocalhostOrigin checks if the origin is from localhost (for client-side validation)
+func (t *StreamableHTTPTransport) isLocalhostOrigin(origin string) bool {
+	// Extract the host part from the origin for comparison
+	var host string
+	if strings.HasPrefix(origin, "https://") {
+		host = strings.TrimPrefix(origin, "https://")
+	} else if strings.HasPrefix(origin, "http://") {
+		host = strings.TrimPrefix(origin, "http://")
+	} else {
+		return false
+	}
+
+	// Handle IPv6 brackets first
+	if strings.HasPrefix(host, "[") {
+		// IPv6 address with brackets - extract the address and handle port separately
+		endBracket := strings.Index(host, "]")
+		if endBracket != -1 {
+			ipv6Host := host[1:endBracket] // Extract IPv6 address without brackets
+			host = ipv6Host
+		}
+	} else {
+		// IPv4 or hostname - remove port if present
+		if strings.Contains(host, ":") {
+			host = strings.Split(host, ":")[0]
+		}
+	}
+
+	// Check if it's a localhost representation
+	localhostHosts := []string{
+		"localhost",
+		"127.0.0.1",
+		"::1",
+	}
+
+	for _, localhost := range localhostHosts {
+		if host == localhost {
+			return true
+		}
+	}
+
+	return false
+}
+
+// Call executes the given function respecting the circuit breaker state
+func (cb *CircuitBreaker) Call(fn func() error) error {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	switch cb.state {
+	case CircuitClosed:
+		return cb.callClosed(fn)
+	case CircuitOpen:
+		return cb.callOpen(fn)
+	case CircuitHalfOpen:
+		return cb.callHalfOpen(fn)
+	default:
+		return fmt.Errorf("unknown circuit breaker state: %v", cb.state)
+	}
+}
+
+// callClosed handles calls when the circuit is closed
+func (cb *CircuitBreaker) callClosed(fn func() error) error {
+	err := fn()
+	if err != nil {
+		cb.recordFailure()
+		if cb.failureCount >= cb.failureThreshold {
+			cb.state = CircuitOpen
+			cb.lastFailureTime = time.Now()
+		}
+		return err
+	}
+	cb.recordSuccess()
+	return nil
+}
+
+// callOpen handles calls when the circuit is open
+func (cb *CircuitBreaker) callOpen(fn func() error) error {
+	if time.Since(cb.lastFailureTime) > cb.recoveryTimeout {
+		cb.state = CircuitHalfOpen
+		cb.halfOpenCalls = 0
+		return cb.callHalfOpen(fn)
+	}
+	return fmt.Errorf("circuit breaker is open")
+}
+
+// callHalfOpen handles calls when the circuit is half-open
+func (cb *CircuitBreaker) callHalfOpen(fn func() error) error {
+	if cb.halfOpenCalls >= cb.halfOpenMaxCalls {
+		return fmt.Errorf("circuit breaker half-open limit exceeded")
+	}
+
+	cb.halfOpenCalls++
+	err := fn()
+	if err != nil {
+		cb.recordFailure()
+		cb.state = CircuitOpen
+		cb.lastFailureTime = time.Now()
+		return err
+	}
+
+	cb.recordSuccess()
+	if cb.halfOpenCalls >= cb.halfOpenMaxCalls {
+		cb.state = CircuitClosed
+		cb.failureCount = 0
+	}
+	return nil
+}
+
+// recordSuccess records a successful operation
+func (cb *CircuitBreaker) recordSuccess() {
+	cb.lastSuccessTime = time.Now()
+	cb.failureCount = 0
+}
+
+// recordFailure records a failed operation
+func (cb *CircuitBreaker) recordFailure() {
+	cb.failureCount++
+	cb.lastFailureTime = time.Now()
+}
+
+// State returns the current circuit breaker state
+func (cb *CircuitBreaker) State() CircuitBreakerState {
+	cb.mu.RLock()
+	defer cb.mu.RUnlock()
+	return cb.state
+}
+
+// classifyError determines whether an error should be retried
+func classifyError(err error) ErrorType {
+	if err == nil {
+		return ErrorTypeRetryable // This shouldn't happen, but be safe
+	}
+
+	// Check for specific error types
+	errStr := err.Error()
+
+	// Network errors that should be retried
+	if strings.Contains(errStr, "connection refused") ||
+		strings.Contains(errStr, "connection reset") ||
+		strings.Contains(errStr, "no route to host") ||
+		strings.Contains(errStr, "network is unreachable") ||
+		strings.Contains(errStr, "timeout") ||
+		strings.Contains(errStr, "EOF") {
+		return ErrorTypeRetryable
+	}
+
+	// HTTP client errors that should NOT be retried
+	if strings.Contains(errStr, "HTTP error 4") {
+		return ErrorTypeNonRetryable
+	}
+
+	// HTTP server errors that should be retried with backoff
+	if strings.Contains(errStr, "HTTP error 5") {
+		return ErrorTypeBackoff
+	}
+
+	// Circuit breaker errors
+	if strings.Contains(errStr, "circuit breaker") {
+		return ErrorTypeCircuitBreaker
+	}
+
+	// Default to retryable for unknown errors
+	return ErrorTypeRetryable
+}
+
+// cryptoRandFloat64 generates a cryptographically secure random float64 in [0, 1)
+func cryptoRandFloat64() (float64, error) {
+	// Generate a random integer in [0, 2^53)
+	max := big.NewInt(1 << 53)
+	n, err := cryptorand.Int(cryptorand.Reader, max)
+	if err != nil {
+		return 0, err
+	}
+	// Convert to float64 in [0, 1)
+	return float64(n.Int64()) / float64(1<<53), nil
+}
+
+// calculateBackoffWithJitter computes backoff duration with jitter to prevent thundering herd
+// If the SSE stream has specified a retry interval, use that instead of exponential backoff
+func (t *StreamableHTTPTransport) calculateBackoffWithJitter(attempt int, es *StreamableEventSource) time.Duration {
+	config := t.reconnectConfig
+
+	// Check if SSE server provided a retry interval (per SSE specification)
+	if es != nil {
+		es.mu.Lock()
+		sseRetryInterval := es.retryInterval
+		es.mu.Unlock()
+
+		if sseRetryInterval > 0 {
+			// Use server-specified retry interval with minimal jitter for compliance
+			jitter := time.Duration(0)
+			if config.JitterPercent > 0 {
+				jitterRange := float64(sseRetryInterval) * (config.JitterPercent / 2) / 100.0 // Reduced jitter for SSE
+				if randFloat, err := cryptoRandFloat64(); err == nil {
+					jitter = time.Duration(randFloat * jitterRange)
+				}
+			}
+			return sseRetryInterval + jitter
+		}
+	}
+
+	// Fallback to standard exponential backoff if no SSE retry interval
+	// Calculate base backoff using exponential backoff
+	backoff := time.Duration(float64(config.InitialBackoff) *
+		math.Pow(config.BackoffMultiplier, float64(attempt)))
+
+	// Cap at maximum backoff
+	if backoff > config.MaxBackoff {
+		backoff = config.MaxBackoff
+	}
+
+	// Add jitter to prevent synchronized reconnection attempts
+	if config.JitterPercent > 0 {
+		jitterRange := float64(backoff) * config.JitterPercent / 100.0
+		if randFloat, err := cryptoRandFloat64(); err == nil {
+			jitter := time.Duration(randFloat * jitterRange)
+			backoff += jitter
+		}
+	}
+
+	return backoff
+}
+
+// updateConnectionState safely updates the connection state
+func (t *StreamableHTTPTransport) updateConnectionState(newState ConnectionState) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.connectionState != newState {
+		t.logger.Printf("[CONNECTION] State changed: %s -> %s",
+			t.connectionState.String(), newState.String())
+		t.connectionState = newState
+	}
+}
+
+// recordReconnectionAttempt tracks reconnection metrics
+func (t *StreamableHTTPTransport) recordReconnectionAttempt(success bool, duration time.Duration) {
+	t.metrics.mu.Lock()
+	defer t.metrics.mu.Unlock()
+
+	t.metrics.attempts++
+	t.metrics.lastAttempt = time.Now()
+	t.metrics.totalDuration += duration
+
+	if success {
+		t.metrics.successes++
+	} else {
+		t.metrics.failures++
+	}
+}
+
+// GetReconnectionMetrics returns a copy of the current metrics
+func (t *StreamableHTTPTransport) GetReconnectionMetrics() ReconnectionMetrics {
+	t.metrics.mu.RLock()
+	defer t.metrics.mu.RUnlock()
+
+	return ReconnectionMetrics{
+		attempts:      t.metrics.attempts,
+		successes:     t.metrics.successes,
+		failures:      t.metrics.failures,
+		totalDuration: t.metrics.totalDuration,
+		lastAttempt:   t.metrics.lastAttempt,
+	}
+}
+
+// SetReconnectionConfig allows customizing reconnection behavior
+func (t *StreamableHTTPTransport) SetReconnectionConfig(config *ReconnectionConfig) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.reconnectConfig = config
+}
+
+// GetReconnectionConfig returns the current reconnection configuration
+func (t *StreamableHTTPTransport) GetReconnectionConfig() *ReconnectionConfig {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.reconnectConfig
+}
+
+// extractOriginFromURL extracts the origin (scheme + host + port) from a URL
+func (t *StreamableHTTPTransport) extractOriginFromURL(urlStr string) (string, error) {
+	if strings.HasPrefix(urlStr, "https://") {
+		hostPath := strings.TrimPrefix(urlStr, "https://")
+		// Handle IPv6 addresses with brackets
+		if strings.HasPrefix(hostPath, "[") {
+			// Find the closing bracket
+			endBracket := strings.Index(hostPath, "]")
+			if endBracket == -1 {
+				return "", mcperrors.NewError(
+					mcperrors.CodeValidationError,
+					"Invalid IPv6 URL format",
+					mcperrors.CategoryValidation,
+					mcperrors.SeverityError,
+				).WithDetail("Missing closing bracket for IPv6 address")
+			}
+			// Extract everything up to the first slash after the bracket (or end of string)
+			remaining := hostPath[endBracket+1:]
+			if strings.Contains(remaining, "/") {
+				remaining = remaining[:strings.Index(remaining, "/")]
+			}
+			return "https://" + hostPath[:endBracket+1] + remaining, nil
+		} else {
+			// Regular hostname or IPv4
+			host := strings.Split(hostPath, "/")[0]
+			return "https://" + host, nil
+		}
+	} else if strings.HasPrefix(urlStr, "http://") {
+		hostPath := strings.TrimPrefix(urlStr, "http://")
+		// Handle IPv6 addresses with brackets
+		if strings.HasPrefix(hostPath, "[") {
+			// Find the closing bracket
+			endBracket := strings.Index(hostPath, "]")
+			if endBracket == -1 {
+				return "", mcperrors.NewError(
+					mcperrors.CodeValidationError,
+					"Invalid IPv6 URL format",
+					mcperrors.CategoryValidation,
+					mcperrors.SeverityError,
+				).WithDetail("Missing closing bracket for IPv6 address")
+			}
+			// Extract everything up to the first slash after the bracket (or end of string)
+			remaining := hostPath[endBracket+1:]
+			if strings.Contains(remaining, "/") {
+				remaining = remaining[:strings.Index(remaining, "/")]
+			}
+			return "http://" + hostPath[:endBracket+1] + remaining, nil
+		} else {
+			// Regular hostname or IPv4
+			host := strings.Split(hostPath, "/")[0]
+			return "http://" + host, nil
+		}
+	} else {
+		return "", mcperrors.NewError(
+			mcperrors.CodeValidationError,
+			"Invalid endpoint URL format",
+			mcperrors.CategoryValidation,
+			mcperrors.SeverityError,
+		).WithDetail("Endpoint must start with http:// or https://")
+	}
+}
+
+// Reliability statistics will be available via middleware when implemented

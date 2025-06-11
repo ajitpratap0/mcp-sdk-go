@@ -1,0 +1,283 @@
+name: Performance Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    # Run nightly at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  performance-regression:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        go-version: [1.24.x]
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Fetch all history for comparison
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: ${{ matrix.go-version }}
+
+    - name: Cache Go modules
+      uses: actions/cache@v4
+      with:
+        path: ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+
+    - name: Install dependencies
+      run: |
+        go mod download
+        go install github.com/rakyll/hey@latest
+        go install github.com/bojand/ghz@latest
+
+    - name: Build
+      run: go build -v ./...
+
+    - name: Run benchmarks
+      run: |
+        # Create results directory
+        mkdir -p benchmarks/results
+
+        # Run Go benchmarks
+        go test -bench=. -benchmem -benchtime=10s -count=3 \
+          -cpu=1,2,4 \
+          -timeout=30m \
+          ./benchmarks/... | tee benchmarks/results/bench_${GITHUB_SHA}.txt
+
+    - name: Run load tests
+      run: |
+        # Start test server in background
+        go run examples/simple-server/main.go &
+        SERVER_PID=$!
+        sleep 5  # Wait for server to start
+
+        # Run load test
+        go test -v -run TestLoadTester ./benchmarks/... \
+          -timeout=15m | tee benchmarks/results/load_${GITHUB_SHA}.txt
+
+        # Stop server
+        kill $SERVER_PID || true
+
+    - name: Run stress tests
+      run: |
+        go test -v -run TestStress ./benchmarks/... \
+          -timeout=15m | tee benchmarks/results/stress_${GITHUB_SHA}.txt
+
+    - name: Compare with baseline
+      if: github.event_name == 'pull_request'
+      run: |
+        # Fetch main branch for comparison
+        git fetch origin main:main
+
+        # Run benchmarks on main branch
+        git checkout main
+        go test -bench=. -benchmem -benchtime=10s -count=3 \
+          ./benchmarks/... | tee benchmarks/results/bench_main.txt
+
+        # Switch back to PR branch
+        git checkout -
+
+        # Compare results
+        go install golang.org/x/perf/cmd/benchstat@latest
+        benchstat benchmarks/results/bench_main.txt benchmarks/results/bench_${GITHUB_SHA}.txt \
+          | tee benchmarks/results/comparison.txt
+
+        # Check for significant regressions (>10% degradation)
+        python3 - <<'EOF'
+        import re
+        import sys
+
+        with open('benchmarks/results/comparison.txt', 'r') as f:
+            content = f.read()
+
+        # Look for significant regressions
+        regressions = []
+        for line in content.split('\n'):
+            if '%' in line and '+' in line:
+                match = re.search(r'\+(\d+\.\d+)%', line)
+                if match:
+                    increase = float(match.group(1))
+                    if increase > 10:
+                        regressions.append(f"{line.strip()} (>{increase}% regression)")
+
+        if regressions:
+            print("Performance Regressions Detected:")
+            for r in regressions:
+                print(f"  - {r}")
+            sys.exit(1)
+        else:
+            print("No significant performance regressions detected")
+        EOF
+
+    - name: Generate performance report
+      if: always()
+      run: |
+        # Create performance report
+        cat > benchmarks/results/report.md <<EOF
+        # Performance Test Report
+
+        **Commit:** ${GITHUB_SHA}
+        **Branch:** ${GITHUB_REF_NAME}
+        **Date:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+
+        ## Benchmark Results
+
+        \`\`\`
+        $(tail -n 50 benchmarks/results/bench_${GITHUB_SHA}.txt)
+        \`\`\`
+
+        ## Load Test Results
+
+        \`\`\`
+        $(grep -E "(Requests|Latency|Throughput)" benchmarks/results/load_${GITHUB_SHA}.txt || echo "No load test results")
+        \`\`\`
+
+        ## Stress Test Results
+
+        \`\`\`
+        $(grep -E "(Success Rate|Recovery|Failures)" benchmarks/results/stress_${GITHUB_SHA}.txt || echo "No stress test results")
+        \`\`\`
+        EOF
+
+    - name: Upload results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: performance-results-${{ github.sha }}
+        path: benchmarks/results/
+
+    - name: Comment on PR
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+
+          // Read performance report
+          const report = fs.readFileSync('benchmarks/results/report.md', 'utf8');
+
+          // Read comparison if exists
+          let comparison = '';
+          try {
+            comparison = fs.readFileSync('benchmarks/results/comparison.txt', 'utf8');
+            if (comparison) {
+              comparison = '\n## Comparison with main branch\n\n```\n' + comparison + '\n```\n';
+            }
+          } catch (e) {
+            // No comparison available
+          }
+
+          const body = report + comparison;
+
+          // Find existing comment
+          const { data: comments } = await github.rest.issues.listComments({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number,
+          });
+
+          const botComment = comments.find(comment =>
+            comment.user.type === 'Bot' &&
+            comment.body.includes('Performance Test Report')
+          );
+
+          if (botComment) {
+            // Update existing comment
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: botComment.id,
+              body: body
+            });
+          } else {
+            // Create new comment
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: body
+            });
+          }
+
+  performance-profile:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: 1.24.x
+
+    - name: Install profiling tools
+      run: |
+        go install github.com/google/pprof@latest
+        go install github.com/uber/go-torch@latest
+
+    - name: Run CPU profiling
+      run: |
+        mkdir -p profiles
+        go test -cpuprofile=profiles/cpu.prof -bench=BenchmarkStdioTransport -benchtime=30s ./benchmarks/...
+        go tool pprof -png -output=profiles/cpu.png profiles/cpu.prof
+
+    - name: Run memory profiling
+      run: |
+        go test -memprofile=profiles/mem.prof -bench=BenchmarkMemoryLeak -benchtime=30s ./benchmarks/...
+        go tool pprof -png -output=profiles/mem.png profiles/mem.prof
+
+    - name: Run block profiling
+      run: |
+        go test -blockprofile=profiles/block.prof -bench=BenchmarkConcurrent -benchtime=30s ./benchmarks/...
+        go tool pprof -png -output=profiles/block.png profiles/block.prof
+
+    - name: Run mutex profiling
+      run: |
+        go test -mutexprofile=profiles/mutex.prof -bench=BenchmarkConcurrent -benchtime=30s ./benchmarks/...
+        go tool pprof -png -output=profiles/mutex.png profiles/mutex.prof
+
+    - name: Upload profiles
+      uses: actions/upload-artifact@v4
+      with:
+        name: performance-profiles-${{ github.sha }}
+        path: profiles/
+
+  alert-regressions:
+    runs-on: ubuntu-latest
+    needs: [performance-regression]
+    if: failure() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+    - name: Create issue for regression
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const title = `Performance Regression Detected - ${new Date().toISOString().split('T')[0]}`;
+          const body = `A performance regression was detected in commit ${context.sha}.
+
+          Please investigate the performance test results and address any regressions.
+
+          **Workflow Run:** ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}
+          `;
+
+          await github.rest.issues.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            title: title,
+            body: body,
+            labels: ['performance', 'regression']
+          });

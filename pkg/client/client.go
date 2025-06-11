@@ -154,6 +154,11 @@ type ClientConfig struct {
 	ctx             context.Context
 	cancel          context.CancelFunc
 	logger          logging.Logger
+
+	// Callback management - thread-safe storage for client callbacks
+	samplingCallback        SamplingCallback
+	resourceChangedCallback ResourceChangedCallback
+	callbackMutex           sync.RWMutex
 }
 
 // ClientOption defines options for creating a client
@@ -775,12 +780,18 @@ func (c *ClientConfig) Sample(ctx context.Context, params *protocol.SampleParams
 
 // SetSamplingCallback sets a callback for sampling events
 func (c *ClientConfig) SetSamplingCallback(callback SamplingCallback) {
-	// Implementation will be added later
+	c.callbackMutex.Lock()
+	defer c.callbackMutex.Unlock()
+	c.samplingCallback = callback
+	c.logger.Debug("Sampling callback registered", logging.Bool("enabled", callback != nil))
 }
 
 // SetResourceChangedCallback sets a callback for resource changes
 func (c *ClientConfig) SetResourceChangedCallback(callback ResourceChangedCallback) {
-	// Implementation will be added later
+	c.callbackMutex.Lock()
+	defer c.callbackMutex.Unlock()
+	c.resourceChangedCallback = callback
+	c.logger.Debug("Resource changed callback registered", logging.Bool("enabled", callback != nil))
 }
 
 // Request handlers
@@ -791,9 +802,44 @@ func (c *ClientConfig) handleSample(ctx context.Context, params interface{}) (in
 		return nil, err
 	}
 
-	// Handle sample request (implementation-specific)
-	return nil, mcperrors.OperationNotSupported("sampling", "Client").
-		WithContext(c.createRequestContext(protocol.MethodSample, nil))
+	// Check if sampling capability is enabled and callback is registered
+	c.callbackMutex.RLock()
+	callback := c.samplingCallback
+	c.callbackMutex.RUnlock()
+
+	if callback == nil {
+		return nil, mcperrors.OperationNotSupported("sampling", "Client - no callback registered").
+			WithContext(c.createRequestContext(protocol.MethodSample, sampleParams.RequestID))
+	}
+
+	// Create a sampling event from the sample params
+	samplingEvent := protocol.SamplingEvent{
+		Type:    "sample_request",
+		Data:    sampleParams,
+		TokenID: sampleParams.RequestID,
+	}
+
+	// Invoke the callback in a safe manner
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				c.logger.Error("Sampling callback panicked", logging.Any("panic", r))
+			}
+		}()
+		callback(samplingEvent)
+	}()
+
+	// Return a basic sample result - in a real implementation,
+	// the callback would likely provide the actual content
+	return &protocol.SampleResult{
+		Content: "Sampling request processed by client callback",
+		Model:   "client-handler",
+		Usage: &protocol.TokenUsage{
+			PromptTokens:     len(sampleParams.Messages),
+			CompletionTokens: 1,
+			TotalTokens:      len(sampleParams.Messages) + 1,
+		},
+	}, nil
 }
 
 func (c *ClientConfig) handleCancel(ctx context.Context, params interface{}) (interface{}, error) {
@@ -838,7 +884,34 @@ func (c *ClientConfig) handleResourcesChanged(ctx context.Context, params interf
 		return err
 	}
 
-	// Handle resources changed notification (implementation-specific)
+	// Get the callback in a thread-safe manner
+	c.callbackMutex.RLock()
+	callback := c.resourceChangedCallback
+	c.callbackMutex.RUnlock()
+
+	if callback != nil {
+		// Invoke the callback in a safe manner
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					c.logger.Error("Resource changed callback panicked",
+						logging.Any("panic", r),
+						logging.String("uri", p.URI))
+				}
+			}()
+			// Call the callback with the URI and the full change parameters
+			callback(p.URI, p)
+		}()
+		c.logger.Debug("Resource changed notification processed",
+			logging.String("uri", p.URI),
+			logging.Int("added", len(p.Added)),
+			logging.Int("modified", len(p.Modified)),
+			logging.Int("removed", len(p.Removed)))
+	} else {
+		c.logger.Debug("Resource changed notification received but no callback registered",
+			logging.String("uri", p.URI))
+	}
+
 	return nil
 }
 
@@ -848,7 +921,32 @@ func (c *ClientConfig) handleResourceUpdated(ctx context.Context, params interfa
 		return err
 	}
 
-	// Handle resource updated notification (implementation-specific)
+	// Get the callback in a thread-safe manner
+	c.callbackMutex.RLock()
+	callback := c.resourceChangedCallback
+	c.callbackMutex.RUnlock()
+
+	if callback != nil {
+		// Invoke the callback in a safe manner
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					c.logger.Error("Resource updated callback panicked",
+						logging.Any("panic", r),
+						logging.String("uri", p.URI))
+				}
+			}()
+			// Call the callback with the URI and the update parameters
+			callback(p.URI, p)
+		}()
+		c.logger.Debug("Resource updated notification processed",
+			logging.String("uri", p.URI),
+			logging.Bool("deleted", p.Deleted))
+	} else {
+		c.logger.Debug("Resource updated notification received but no callback registered",
+			logging.String("uri", p.URI))
+	}
+
 	return nil
 }
 

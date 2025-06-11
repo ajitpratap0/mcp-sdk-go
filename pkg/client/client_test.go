@@ -99,6 +99,30 @@ func (m *mockTransport) GenerateID() string {
 	return "test-id"
 }
 
+func (m *mockTransport) SendBatchRequest(ctx context.Context, batch *protocol.JSONRPCBatchRequest) (*protocol.JSONRPCBatchResponse, error) {
+	// Simple mock implementation
+	response := &protocol.JSONRPCBatchResponse{}
+	for _, item := range *batch {
+		if req, ok := item.(*protocol.Request); ok {
+			res := &protocol.Response{ID: req.ID}
+			*response = append(*response, res)
+		}
+	}
+	return response, nil
+}
+
+func (m *mockTransport) HandleBatchRequest(ctx context.Context, batch *protocol.JSONRPCBatchRequest) (*protocol.JSONRPCBatchResponse, error) {
+	// Simple mock implementation
+	response := &protocol.JSONRPCBatchResponse{}
+	for _, item := range *batch {
+		if req, ok := item.(*protocol.Request); ok {
+			res := &protocol.Response{ID: req.ID}
+			*response = append(*response, res)
+		}
+	}
+	return response, nil
+}
+
 // Send implements the transport.Transport interface for basic message sending
 func (m *mockTransport) Send(data []byte) error {
 	return nil

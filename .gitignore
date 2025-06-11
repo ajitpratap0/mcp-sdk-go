@@ -18,6 +18,8 @@ bin/
 
 # Output of the go coverage tool
 *.coverprofile
+coverage.out
+coverage.txt
 
 # Generated files
 gen/

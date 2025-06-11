@@ -36,6 +36,10 @@ type Transport interface {
 	SendRequest(ctx context.Context, method string, params interface{}) (interface{}, error)
 	SendNotification(ctx context.Context, method string, params interface{}) error
 
+	// Batch processing methods
+	SendBatchRequest(ctx context.Context, batch *protocol.JSONRPCBatchRequest) (*protocol.JSONRPCBatchResponse, error)
+	HandleBatchRequest(ctx context.Context, batch *protocol.JSONRPCBatchRequest) (*protocol.JSONRPCBatchResponse, error)
+
 	// Handler registration
 	RegisterRequestHandler(method string, handler RequestHandler)
 	RegisterNotificationHandler(method string, handler NotificationHandler)
@@ -115,6 +119,7 @@ type TransportConfig struct {
 	Reliability   ReliabilityConfig   `json:"reliability"`
 	Observability ObservabilityConfig `json:"observability"`
 	Performance   PerformanceConfig   `json:"performance"`
+	Security      SecurityConfig      `json:"security"`
 
 	// Advanced features (when middleware implemented)
 	LoadBalancer *LoadBalancerConfig `json:"load_balancer,omitempty"`
@@ -133,6 +138,8 @@ type FeatureConfig struct {
 	EnableStreaming      bool `json:"enable_streaming"`
 	EnableBatching       bool `json:"enable_batching"`
 	EnableAsyncTools     bool `json:"enable_async_tools"`
+	EnableAuthentication bool `json:"enable_authentication"`
+	EnableRateLimiting   bool `json:"enable_rate_limiting"`
 }
 
 // ConnectionConfig for connection management
@@ -192,6 +199,64 @@ type QueuingConfig struct {
 // ParallelismConfig for parallel processing (placeholder for future middleware)
 type ParallelismConfig struct {
 	MaxWorkers int `json:"max_workers"`
+}
+
+// SecurityConfig configures security features including authentication
+type SecurityConfig struct {
+	// Authentication configuration
+	Authentication *AuthenticationConfig `json:"authentication,omitempty"`
+
+	// Existing security settings
+	AllowedOrigins      []string `json:"allowed_origins,omitempty"`
+	AllowWildcardOrigin bool     `json:"allow_wildcard_origin"`
+
+	// TLS configuration
+	TLS *TLSConfig `json:"tls,omitempty"`
+
+	// Rate limiting
+	RateLimit *RateLimitConfig `json:"rate_limit,omitempty"`
+}
+
+// AuthenticationConfig configures authentication for transports
+type AuthenticationConfig struct {
+	// Type of authentication (bearer, apikey, oauth2, etc.)
+	Type string `json:"type"`
+
+	// Provider-specific configuration
+	ProviderConfig map[string]interface{} `json:"provider_config,omitempty"`
+
+	// Whether authentication is required for all requests
+	Required bool `json:"required"`
+
+	// Allow anonymous access for specific operations
+	AllowAnonymous bool `json:"allow_anonymous"`
+
+	// Token expiry settings
+	TokenExpiry      time.Duration `json:"token_expiry,omitempty"`
+	RefreshThreshold time.Duration `json:"refresh_threshold,omitempty"`
+
+	// Cache configuration for validated tokens
+	EnableCache bool          `json:"enable_cache"`
+	CacheTTL    time.Duration `json:"cache_ttl,omitempty"`
+}
+
+// TLSConfig configures TLS settings
+type TLSConfig struct {
+	Enabled            bool     `json:"enabled"`
+	CertFile           string   `json:"cert_file,omitempty"`
+	KeyFile            string   `json:"key_file,omitempty"`
+	CAFile             string   `json:"ca_file,omitempty"`
+	InsecureSkipVerify bool     `json:"insecure_skip_verify"`
+	CipherSuites       []string `json:"cipher_suites,omitempty"`
+	MinVersion         string   `json:"min_version,omitempty"`
+}
+
+// RateLimitConfig configures rate limiting
+type RateLimitConfig struct {
+	Enabled           bool `json:"enabled"`
+	RequestsPerMinute int  `json:"requests_per_minute"`
+	RequestsPerHour   int  `json:"requests_per_hour"`
+	BurstSize         int  `json:"burst_size"`
 }
 
 // SessionHandler handles session lifecycle events
@@ -436,6 +501,77 @@ func (t *BaseTransport) GetRequestIDPrefix() string {
 	return t.requestIDPrefix
 }
 
+// HandleBatchRequest processes a batch of requests and returns a batch response
+func (t *BaseTransport) HandleBatchRequest(ctx context.Context, batch *protocol.JSONRPCBatchRequest) (*protocol.JSONRPCBatchResponse, error) {
+	if batch == nil || batch.Len() == 0 {
+		return nil, fmt.Errorf("batch request is empty")
+	}
+
+	responses := make([]*protocol.Response, 0)
+
+	// Process each item in the batch
+	for _, item := range *batch {
+		switch v := item.(type) {
+		case *protocol.Request:
+			// Process request and add response
+			response, err := t.HandleRequest(ctx, v)
+			if err != nil {
+				// Create error response
+				errorResp := &protocol.Response{
+					JSONRPCMessage: protocol.JSONRPCMessage{JSONRPC: protocol.JSONRPCVersion},
+					ID:             v.ID,
+					Error: &protocol.Error{
+						Code:    protocol.InternalError,
+						Message: err.Error(),
+					},
+				}
+				responses = append(responses, errorResp)
+			} else if response != nil {
+				responses = append(responses, response)
+			}
+		case *protocol.Notification:
+			// Process notification (no response expected)
+			_ = t.HandleNotification(ctx, v)
+			// Notifications don't generate responses in JSON-RPC 2.0
+		}
+	}
+
+	// If all items were notifications, return empty response per JSON-RPC 2.0 spec
+	if len(responses) == 0 {
+		return &protocol.JSONRPCBatchResponse{}, nil
+	}
+
+	return protocol.NewJSONRPCBatchResponse(responses...), nil
+}
+
+// SendBatchRequest sends a batch request (default implementation processes sequentially)
+func (t *BaseTransport) SendBatchRequest(ctx context.Context, batch *protocol.JSONRPCBatchRequest) (*protocol.JSONRPCBatchResponse, error) {
+	if batch == nil || batch.Len() == 0 {
+		return nil, fmt.Errorf("batch request is empty")
+	}
+
+	responses := make([]*protocol.Response, 0)
+
+	// Process each item in the batch
+	for _, item := range *batch {
+		switch item.(type) {
+		case *protocol.Request:
+			// For requests, we need to send them and wait for responses
+			// This requires the transport to implement SendRequest
+			// Since BaseTransport doesn't have direct send capability,
+			// this default implementation returns an error
+			return nil, fmt.Errorf("SendBatchRequest requires transport-specific implementation for sending requests")
+		case *protocol.Notification:
+			// For notifications, we need to send them without waiting for responses
+			// This also requires transport-specific implementation
+			return nil, fmt.Errorf("SendBatchRequest requires transport-specific implementation for sending notifications")
+		}
+	}
+
+	// If we somehow get here with no items processed, return empty response
+	return protocol.NewJSONRPCBatchResponse(responses...), nil
+}
+
 // Cleanup cleans up transport resources
 func (t *BaseTransport) Cleanup() {
 	t.Lock()
@@ -486,6 +622,10 @@ func DefaultTransportConfig(transportType TransportType) TransportConfig {
 			FlushInterval:  100 * time.Millisecond,
 			MaxConcurrency: 100,
 			RequestTimeout: 30 * time.Second,
+		},
+		Security: SecurityConfig{
+			AllowedOrigins:      []string{},
+			AllowWildcardOrigin: false,
 		},
 	}
 }

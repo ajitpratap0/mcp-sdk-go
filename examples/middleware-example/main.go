@@ -197,6 +197,23 @@ func (m *requestTimingMiddleware) Wrap(t transport.Transport) transport.Transpor
 	return m
 }
 
+func (m *requestTimingMiddleware) HandleBatchRequest(ctx context.Context, batch *protocol.JSONRPCBatchRequest) (*protocol.JSONRPCBatchResponse, error) {
+	return m.transport.HandleBatchRequest(ctx, batch)
+}
+
+func (m *requestTimingMiddleware) SendBatchRequest(ctx context.Context, batch *protocol.JSONRPCBatchRequest) (*protocol.JSONRPCBatchResponse, error) {
+	start := time.Now()
+	result, err := m.transport.SendBatchRequest(ctx, batch)
+	duration := time.Since(start)
+
+	if err != nil {
+		fmt.Printf("[Timing] Batch request failed after %v: %v\n", duration, err)
+	} else {
+		fmt.Printf("[Timing] Batch request (%d items) completed in %v\n", batch.Len(), duration)
+	}
+	return result, err
+}
+
 func (m *requestTimingMiddleware) SendRequest(ctx context.Context, method string, params interface{}) (interface{}, error) {
 	start := time.Now()
 	result, err := m.transport.SendRequest(ctx, method, params)
@@ -293,6 +310,22 @@ func (m *requestIDMiddleware) SendRequest(ctx context.Context, method string, pa
 	// ctx = context.WithValue(ctx, "requestID", requestID)
 
 	return m.transport.SendRequest(ctx, method, params)
+}
+
+func (m *requestIDMiddleware) HandleBatchRequest(ctx context.Context, batch *protocol.JSONRPCBatchRequest) (*protocol.JSONRPCBatchResponse, error) {
+	return m.transport.HandleBatchRequest(ctx, batch)
+}
+
+func (m *requestIDMiddleware) SendBatchRequest(ctx context.Context, batch *protocol.JSONRPCBatchRequest) (*protocol.JSONRPCBatchResponse, error) {
+	batchID := fmt.Sprintf("batch-%d-%d", time.Now().Unix(), m.counter)
+	m.counter++
+
+	fmt.Printf("[RequestID] Assigning ID %s to batch request (%d items)\n", batchID, batch.Len())
+
+	// Could add batch ID to context here
+	// ctx = context.WithValue(ctx, "batchID", batchID)
+
+	return m.transport.SendBatchRequest(ctx, batch)
 }
 
 func (m *requestIDMiddleware) Initialize(ctx context.Context) error {

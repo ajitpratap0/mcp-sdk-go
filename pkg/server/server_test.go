@@ -65,6 +65,16 @@ func (m *mockTransport) SendNotification(ctx context.Context, method string, par
 	return nil
 }
 
+func (m *mockTransport) HandleBatchRequest(ctx context.Context, batch *protocol.JSONRPCBatchRequest) (*protocol.JSONRPCBatchResponse, error) {
+	// Simple implementation for tests
+	return &protocol.JSONRPCBatchResponse{}, nil
+}
+
+func (m *mockTransport) SendBatchRequest(ctx context.Context, batch *protocol.JSONRPCBatchRequest) (*protocol.JSONRPCBatchResponse, error) {
+	// Simple implementation for tests
+	return &protocol.JSONRPCBatchResponse{}, nil
+}
+
 func (m *mockTransport) RegisterRequestHandler(method string, handler transport.RequestHandler) {
 	m.requestHandlers[method] = handler
 }

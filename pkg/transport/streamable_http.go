@@ -654,6 +654,112 @@ func (t *StreamableHTTPTransport) SendNotification(ctx context.Context, method s
 	return nil
 }
 
+// SendBatchRequest sends a batch of requests and/or notifications
+func (t *StreamableHTTPTransport) SendBatchRequest(ctx context.Context, batch *protocol.JSONRPCBatchRequest) (*protocol.JSONRPCBatchResponse, error) {
+	if batch == nil || batch.Len() == 0 {
+		return nil, fmt.Errorf("batch request is empty")
+	}
+
+	// For HTTP transport, we can send the entire batch in a single request
+	// and expect a batch response
+	batchID := fmt.Sprintf("batch-%s-%d", t.requestIDPrefix, t.GetNextID())
+
+	// Create maps to track responses for each request
+	responseMap := make(map[string]chan *protocol.Response)
+	requests := batch.GetRequests()
+
+	// Set up response handlers for each request in the batch
+	t.mu.Lock()
+	for _, req := range requests {
+		idStr := fmt.Sprintf("%v", req.ID)
+		ch := make(chan *protocol.Response, 1)
+		responseMap[idStr] = ch
+		t.responseHandlers[idStr] = func(resp *protocol.Response) {
+			select {
+			case ch <- resp:
+			default:
+				t.logger.Printf("[WARN] SendBatchRequest: response channel for %s is full or closed\n", idStr)
+			}
+		}
+	}
+	t.mu.Unlock()
+
+	// Clean up handlers on exit
+	defer func() {
+		t.mu.Lock()
+		for _, req := range requests {
+			idStr := fmt.Sprintf("%v", req.ID)
+			delete(t.responseHandlers, idStr)
+		}
+		t.mu.Unlock()
+		for _, ch := range responseMap {
+			close(ch)
+		}
+	}()
+
+	// Send the batch request
+	if err := t.sendHTTPRequest(ctx, batch, batchID); err != nil {
+		return nil, fmt.Errorf("failed to send batch request: %w", err)
+	}
+
+	// If batch contains only notifications, return empty response immediately
+	if len(requests) == 0 {
+		return &protocol.JSONRPCBatchResponse{}, nil
+	}
+
+	// Wait for all responses with timeout
+	responses := make([]*protocol.Response, 0, len(requests))
+	responseTimeout := 30 * time.Second
+	timer := time.NewTimer(responseTimeout)
+	defer timer.Stop()
+
+	// Create a context for waiting on responses
+	waitCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// Collect responses
+	for len(responses) < len(requests) {
+		select {
+		case <-waitCtx.Done():
+			return nil, waitCtx.Err()
+		case <-timer.C:
+			return nil, fmt.Errorf("timeout waiting for batch responses after %v", responseTimeout)
+		default:
+			// Try to collect responses
+			hasResponse := false
+			for id, ch := range responseMap {
+				select {
+				case resp := <-ch:
+					if resp != nil {
+						responses = append(responses, resp)
+						delete(responseMap, id)
+						hasResponse = true
+					}
+				default:
+					// Non-blocking
+				}
+			}
+			// If no response received in this iteration, wait briefly
+			if !hasResponse {
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
+	}
+
+	// Order responses according to request order
+	orderedResponses := make([]*protocol.Response, 0, len(responses))
+	for _, req := range requests {
+		for _, resp := range responses {
+			if fmt.Sprintf("%v", resp.ID) == fmt.Sprintf("%v", req.ID) {
+				orderedResponses = append(orderedResponses, resp)
+				break
+			}
+		}
+	}
+
+	return protocol.NewJSONRPCBatchResponse(orderedResponses...), nil
+}
+
 // Start begins processing messages (blocking)
 func (t *StreamableHTTPTransport) Start(ctx context.Context) error {
 	if !t.running.CompareAndSwap(false, true) {

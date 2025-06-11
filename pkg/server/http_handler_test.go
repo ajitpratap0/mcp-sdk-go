@@ -249,6 +249,16 @@ func (m *mockHTTPTransport) SendRequest(ctx context.Context, method string, para
 	return m.mockTransport.SendRequest(ctx, method, params)
 }
 
+func (m *mockHTTPTransport) HandleBatchRequest(ctx context.Context, batch *protocol.JSONRPCBatchRequest) (*protocol.JSONRPCBatchResponse, error) {
+	// Simple implementation for tests
+	return &protocol.JSONRPCBatchResponse{}, nil
+}
+
+func (m *mockHTTPTransport) SendBatchRequest(ctx context.Context, batch *protocol.JSONRPCBatchRequest) (*protocol.JSONRPCBatchResponse, error) {
+	// Simple implementation for tests
+	return &protocol.JSONRPCBatchResponse{}, nil
+}
+
 func TestNewHTTPHandler(t *testing.T) {
 	handler := NewHTTPHandler()
 	if handler == nil {

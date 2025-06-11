@@ -117,6 +117,16 @@ func (m *middlewareTransport) Cleanup() {
 	m.next.Cleanup()
 }
 
+// SendBatchRequest delegates to the wrapped transport
+func (m *middlewareTransport) SendBatchRequest(ctx context.Context, batch *protocol.JSONRPCBatchRequest) (*protocol.JSONRPCBatchResponse, error) {
+	return m.next.SendBatchRequest(ctx, batch)
+}
+
+// HandleBatchRequest delegates to the wrapped transport
+func (m *middlewareTransport) HandleBatchRequest(ctx context.Context, batch *protocol.JSONRPCBatchRequest) (*protocol.JSONRPCBatchResponse, error) {
+	return m.next.HandleBatchRequest(ctx, batch)
+}
+
 // MiddlewareBuilder builds middleware from configuration
 type MiddlewareBuilder struct {
 	config TransportConfig
@@ -140,5 +150,58 @@ func (mb *MiddlewareBuilder) Build() []Middleware {
 		middleware = append(middleware, NewObservabilityMiddleware(mb.config.Observability))
 	}
 
+	// Authentication should be one of the outermost layers
+	if mb.config.Features.EnableAuthentication && mb.config.Security.Authentication != nil {
+		// Use the registered auth middleware factory if available
+		if authFactory := GetAuthMiddlewareFactory(); authFactory != nil {
+			authMiddleware := authFactory(mb.config.Security.Authentication)
+			if authMiddleware != nil {
+				middleware = append(middleware, authMiddleware)
+			}
+		}
+	}
+
+	// Rate limiting should be after authentication
+	if mb.config.Features.EnableRateLimiting && mb.config.Security.RateLimit != nil {
+		// Use the registered rate limit middleware factory if available
+		if rateLimitFactory := GetRateLimitMiddlewareFactory(); rateLimitFactory != nil {
+			rateLimitMiddleware := rateLimitFactory(mb.config.Security.RateLimit)
+			if rateLimitMiddleware != nil {
+				middleware = append(middleware, rateLimitMiddleware)
+			}
+		}
+	}
+
 	return middleware
+}
+
+// AuthMiddlewareFactory is a function that creates auth middleware from config
+type AuthMiddlewareFactory func(*AuthenticationConfig) Middleware
+
+var authMiddlewareFactory AuthMiddlewareFactory
+
+// RegisterAuthMiddlewareFactory registers the auth middleware factory
+// This is called by the auth package to avoid import cycles
+func RegisterAuthMiddlewareFactory(factory AuthMiddlewareFactory) {
+	authMiddlewareFactory = factory
+}
+
+// GetAuthMiddlewareFactory returns the registered auth middleware factory
+func GetAuthMiddlewareFactory() AuthMiddlewareFactory {
+	return authMiddlewareFactory
+}
+
+// RateLimitMiddlewareFactory is a function that creates rate limit middleware from config
+type RateLimitMiddlewareFactory func(*RateLimitConfig) Middleware
+
+var rateLimitMiddlewareFactory RateLimitMiddlewareFactory
+
+// RegisterRateLimitMiddlewareFactory registers the rate limit middleware factory
+func RegisterRateLimitMiddlewareFactory(factory RateLimitMiddlewareFactory) {
+	rateLimitMiddlewareFactory = factory
+}
+
+// GetRateLimitMiddlewareFactory returns the registered rate limit middleware factory
+func GetRateLimitMiddlewareFactory() RateLimitMiddlewareFactory {
+	return rateLimitMiddlewareFactory
 }

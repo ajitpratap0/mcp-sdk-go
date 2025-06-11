@@ -212,6 +212,98 @@ func (rt *reliabilityTransport) SendNotification(ctx context.Context, method str
 	}).WithDetail(fmt.Sprintf("Last error: %v", lastErr))
 }
 
+// SendBatchRequest wraps the underlying SendBatchRequest with retry logic
+func (rt *reliabilityTransport) SendBatchRequest(ctx context.Context, batch *protocol.JSONRPCBatchRequest) (*protocol.JSONRPCBatchResponse, error) {
+	config := rt.middleware.config
+
+	// Circuit breaker check
+	if rt.middleware.circuitBreaker != nil {
+		if !rt.middleware.circuitBreaker.canMakeCall() {
+			return nil, mcperrors.NewError(
+				mcperrors.CodeResourceUnavailable,
+				"Circuit breaker is open",
+				mcperrors.CategoryTransport,
+				mcperrors.SeverityError,
+			).WithContext(&mcperrors.Context{
+				Method:    "batch",
+				Component: "ReliabilityMiddleware",
+				Operation: "circuit_breaker_check",
+			})
+		}
+	}
+
+	var lastErr error
+	maxAttempts := config.MaxRetries + 1
+
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+
+		// Calculate delay for this attempt (skip for first attempt)
+		if attempt > 0 {
+			delay := rt.calculateBackoff(attempt, config)
+			rt.middleware.logger.Printf("Retry attempt %d/%d for batch request (size=%d) after %v delay",
+				attempt, config.MaxRetries, batch.Len(), delay)
+
+			select {
+			case <-time.After(delay):
+				// Continue with retry
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+
+		// Make the actual request
+		result, err := rt.middlewareTransport.SendBatchRequest(ctx, batch)
+
+		// Success - record with circuit breaker and return
+		if err == nil {
+			if rt.middleware.circuitBreaker != nil {
+				rt.middleware.circuitBreaker.recordSuccess()
+			}
+			return result, nil
+		}
+
+		// Error occurred
+		lastErr = err
+
+		// Check if error is retryable
+		if !rt.isRetryableError(err) {
+			if rt.middleware.circuitBreaker != nil {
+				rt.middleware.circuitBreaker.recordFailure()
+			}
+			return nil, err
+		}
+
+		if rt.middleware.circuitBreaker != nil {
+			rt.middleware.circuitBreaker.recordFailure()
+		}
+
+		rt.middleware.logger.Printf("Retryable error for batch request (attempt %d/%d): %v",
+			attempt+1, maxAttempts, err)
+	}
+
+	// All retries exhausted
+	return nil, mcperrors.NewError(
+		mcperrors.CodeOperationFailed,
+		fmt.Sprintf("Batch request failed after %d attempts", maxAttempts),
+		mcperrors.CategoryTransport,
+		mcperrors.SeverityError,
+	).WithContext(&mcperrors.Context{
+		Method:    "batch",
+		Component: "ReliabilityMiddleware",
+		Operation: "retry_exhausted",
+	}).WithDetail(fmt.Sprintf("Last error: %v", lastErr))
+}
+
+// HandleBatchRequest wraps the underlying HandleBatchRequest with observability
+func (rt *reliabilityTransport) HandleBatchRequest(ctx context.Context, batch *protocol.JSONRPCBatchRequest) (*protocol.JSONRPCBatchResponse, error) {
+	// For handling requests, we don't apply retry logic since this is the server side
+	// Just delegate to the underlying transport
+	return rt.middlewareTransport.HandleBatchRequest(ctx, batch)
+}
+
 // isRetryableError determines if an error should trigger a retry
 func (rt *reliabilityTransport) isRetryableError(err error) bool {
 	if err == nil {

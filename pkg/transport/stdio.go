@@ -11,6 +11,7 @@ import (
 	"os"
 	"runtime/debug"
 	"sync"
+	"time"
 
 	"golang.org/x/sync/errgroup"
 
@@ -234,6 +235,45 @@ func (t *StdioTransport) processMessage(data []byte) {
 	}()
 
 	t.BaseTransport.Logf("StdioTransport.processMessage: Received raw data: %s", string(data))
+
+	// First check if this is a batch response
+	if protocol.IsBatch(data) {
+		t.BaseTransport.Logf("StdioTransport.processMessage: Detected batch response")
+		batchResp, err := protocol.ParseJSONRPCBatchResponse(data)
+		if err != nil {
+			// Not a valid batch response, try batch request
+			batchReq, err2 := protocol.ParseJSONRPCBatchRequest(data)
+			if err2 != nil {
+				t.handleError(fmt.Errorf("error parsing batch: %w", err))
+				return
+			}
+			// Handle batch request
+			ctx := context.Background()
+			resp, err := t.BaseTransport.HandleBatchRequest(ctx, batchReq)
+			if err != nil {
+				t.handleError(fmt.Errorf("error handling batch request: %w", err))
+				return
+			}
+			// Send batch response
+			respData, err := resp.ToJSON()
+			if err != nil {
+				t.handleError(fmt.Errorf("error marshalling batch response: %w", err))
+				return
+			}
+			if err := t.Send(respData); err != nil {
+				t.handleError(fmt.Errorf("error sending batch response: %w", err))
+			}
+			return
+		}
+
+		// Process each response in the batch
+		for _, resp := range *batchResp {
+			t.BaseTransport.Logf("StdioTransport.processMessage: Processing batch response for ID %v", resp.ID)
+			t.BaseTransport.HandleResponse(resp)
+		}
+		return
+	}
+
 	// Attempt to determine message type by unmarshalling into a generic map
 	var genericMsg map[string]interface{}
 	if err := json.Unmarshal(data, &genericMsg); err != nil {
@@ -415,4 +455,102 @@ func (t *StdioTransport) RegisterProgressHandler(id interface{}, handler Progres
 // UnregisterProgressHandler removes a progress handler
 func (t *StdioTransport) UnregisterProgressHandler(id interface{}) {
 	// This is a placeholder implementation
+}
+
+// SendBatchRequest sends a batch of requests and/or notifications
+func (t *StdioTransport) SendBatchRequest(ctx context.Context, batch *protocol.JSONRPCBatchRequest) (*protocol.JSONRPCBatchResponse, error) {
+	if batch == nil || batch.Len() == 0 {
+		return nil, fmt.Errorf("batch request is empty")
+	}
+
+	// Marshal the entire batch
+	batchData, err := batch.ToJSON()
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal batch request: %w", err)
+	}
+
+	// Create response tracking for requests in the batch
+	responseMap := make(map[string]chan *protocol.Response)
+	requests := batch.GetRequests()
+
+	// Set up response handlers for each request
+	for _, req := range requests {
+		idStr := fmt.Sprintf("%v", req.ID)
+		ch := make(chan *protocol.Response, 1)
+		responseMap[idStr] = ch
+
+		t.Lock()
+		t.pendingRequests[idStr] = ch
+		t.Unlock()
+	}
+
+	// Clean up handlers on exit
+	defer func() {
+		t.Lock()
+		for id := range responseMap {
+			delete(t.pendingRequests, id)
+		}
+		t.Unlock()
+		for _, ch := range responseMap {
+			close(ch)
+		}
+	}()
+
+	// Send the batch
+	t.Logf("SendBatchRequest: Sending batch with %d items", batch.Len())
+	if err := t.Send(batchData); err != nil {
+		return nil, fmt.Errorf("failed to send batch: %w", err)
+	}
+
+	// If batch contains only notifications, return empty response immediately
+	if len(requests) == 0 {
+		return &protocol.JSONRPCBatchResponse{}, nil
+	}
+
+	// Wait for all responses with timeout
+	responses := make([]*protocol.Response, 0, len(requests))
+	collected := 0
+	timeout := time.NewTimer(30 * time.Second)
+	defer timeout.Stop()
+
+	// Collect responses until we have them all or timeout
+	for collected < len(requests) {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-timeout.C:
+			return nil, fmt.Errorf("timeout waiting for batch responses (got %d of %d)", collected, len(requests))
+		default:
+			// Check each response channel
+			foundResponse := false
+			for id, ch := range responseMap {
+				select {
+				case resp := <-ch:
+					if resp != nil {
+						responses = append(responses, resp)
+						delete(responseMap, id)
+						collected++
+						foundResponse = true
+						t.Logf("SendBatchRequest: Collected response %d of %d (ID: %s)", collected, len(requests), id)
+					}
+				default:
+					// Non-blocking
+				}
+			}
+
+			// If no response found in this iteration, wait a bit to avoid busy waiting
+			if !foundResponse {
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case <-timeout.C:
+					return nil, fmt.Errorf("timeout waiting for batch responses (got %d of %d)", collected, len(requests))
+				case <-time.After(10 * time.Millisecond):
+					// Brief wait before next check
+				}
+			}
+		}
+	}
+
+	return protocol.NewJSONRPCBatchResponse(responses...), nil
 }

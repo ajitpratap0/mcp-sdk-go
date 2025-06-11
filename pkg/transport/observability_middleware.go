@@ -130,6 +130,70 @@ func (ot *observabilityTransport) SendNotification(ctx context.Context, method s
 	return err
 }
 
+// SendBatchRequest wraps the underlying SendBatchRequest with observability
+func (ot *observabilityTransport) SendBatchRequest(ctx context.Context, batch *protocol.JSONRPCBatchRequest) (*protocol.JSONRPCBatchResponse, error) {
+	start := time.Now()
+
+	if ot.middleware.config.EnableLogging {
+		ot.middleware.logger.Printf("Sending batch request: size=%d", batch.Len())
+	}
+
+	if ot.middleware.config.EnableMetrics {
+		ot.middleware.metrics.incRequestsTotal("batch")
+	}
+
+	result, err := ot.middlewareTransport.SendBatchRequest(ctx, batch)
+
+	duration := time.Since(start)
+
+	if err != nil {
+		if ot.middleware.config.EnableLogging {
+			ot.middleware.logger.Printf("Batch request failed: size=%d duration=%v error=%v", batch.Len(), duration, err)
+		}
+		if ot.middleware.config.EnableMetrics {
+			ot.middleware.metrics.incRequestsErrors("batch")
+		}
+	} else {
+		if ot.middleware.config.EnableLogging {
+			ot.middleware.logger.Printf("Batch request succeeded: size=%d responses=%d duration=%v", batch.Len(), result.Len(), duration)
+		}
+		if ot.middleware.config.EnableMetrics {
+			ot.middleware.metrics.incRequestsSuccess("batch")
+		}
+	}
+
+	if ot.middleware.config.EnableMetrics {
+		ot.middleware.metrics.observeRequestDuration("batch", duration)
+	}
+
+	return result, err
+}
+
+// HandleBatchRequest wraps the underlying HandleBatchRequest with observability
+func (ot *observabilityTransport) HandleBatchRequest(ctx context.Context, batch *protocol.JSONRPCBatchRequest) (*protocol.JSONRPCBatchResponse, error) {
+	start := time.Now()
+
+	if ot.middleware.config.EnableLogging {
+		ot.middleware.logger.Printf("Handling batch request: size=%d", batch.Len())
+	}
+
+	result, err := ot.middlewareTransport.HandleBatchRequest(ctx, batch)
+
+	duration := time.Since(start)
+
+	if err != nil {
+		if ot.middleware.config.EnableLogging {
+			ot.middleware.logger.Printf("Batch request handling failed: size=%d duration=%v error=%v", batch.Len(), duration, err)
+		}
+	} else {
+		if ot.middleware.config.EnableLogging {
+			ot.middleware.logger.Printf("Batch request handling succeeded: size=%d responses=%d duration=%v", batch.Len(), result.Len(), duration)
+		}
+	}
+
+	return result, err
+}
+
 // Initialize wraps the underlying Initialize with observability
 func (ot *observabilityTransport) Initialize(ctx context.Context) error {
 	start := time.Now()
